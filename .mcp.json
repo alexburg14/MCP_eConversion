@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "econversion": {
+      "command": "python",
+      "args": ["c:\\Users\\da1qu1r1\\Desktop\\Uni\\AI4MS\\server.py"]
+    }
+  }
+}
