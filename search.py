@@ -1,6 +1,20 @@
 import csv
-import requests
+import json
+from pathlib import Path
 from rank_bm25 import BM25Okapi
+
+_BASE = Path(__file__).parent
+_CACHE_PATH = _BASE / "abstracts_cache.json"
+
+
+def _load_abstracts_cache():
+    if _CACHE_PATH.exists():
+        with open(_CACHE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+_ABSTRACTS = _load_abstracts_cache()
 
 
 def load_papers(csv_path):
@@ -31,32 +45,6 @@ def build_index(papers):
     return BM25Okapi(tokenized)
 
 
-def _reconstruct_abstract(inverted_index):
-    if not inverted_index:
-        return None
-    positions = {}
-    for word, pos_list in inverted_index.items():
-        for pos in pos_list:
-            positions[pos] = word
-    return " ".join(positions[i] for i in sorted(positions))
-
-
-def fetch_openalex(doi, email="alexburg777@gmail.com"):
-    url = f"https://api.openalex.org/works/https://doi.org/{doi}"
-    try:
-        r = requests.get(url, headers={"User-Agent": f"mailto:{email}"}, timeout=10)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        return {
-            "abstract": _reconstruct_abstract(data.get("abstract_inverted_index")),
-            "open_access": data.get("open_access", {}).get("is_oa", False),
-            "openalex_url": data.get("id"),
-        }
-    except Exception:
-        return None
-
-
 def search(query, papers, bm25, top_k=5):
     tokens = query.lower().split()
     scores = bm25.get_scores(tokens)
@@ -65,8 +53,9 @@ def search(query, papers, bm25, top_k=5):
     results = []
     for idx in top_indices:
         paper = dict(papers[idx])
-        extra = fetch_openalex(paper["doi"])
-        if extra:
-            paper.update(extra)
+        cached = _ABSTRACTS.get(paper["doi"].lower())
+        if cached:
+            paper["abstract"] = cached["abstract"]
+            paper["abstract_source"] = cached["source"]
         results.append(paper)
     return results
