@@ -41,13 +41,30 @@ def load_papers(csv_path):
 
 
 def build_index(papers):
-    tokenized = [p["title"].lower().split() for p in papers]
-    return BM25Okapi(tokenized)
+    title_tokens = [p["title"].lower().split() for p in papers]
+    title_bm25 = BM25Okapi(title_tokens)
+
+    abstract_tokens = [
+        _ABSTRACTS.get(p["doi"].lower(), {}).get("abstract", "").lower().split()
+        or [""]
+        for p in papers
+    ]
+    abstract_bm25 = BM25Okapi(abstract_tokens)
+
+    return title_bm25, abstract_bm25
 
 
-def search(query, papers, bm25, top_k=5):
+def search(query, papers, index, top_k=5):
+    title_bm25, abstract_bm25 = index
     tokens = query.lower().split()
-    scores = bm25.get_scores(tokens)
+
+    title_scores = title_bm25.get_scores(tokens)
+    abstract_scores = abstract_bm25.get_scores(tokens)
+
+    use_abstracts = max(abstract_scores) > max(title_scores)
+    scores = abstract_scores if use_abstracts else title_scores
+    search_field = "abstract" if use_abstracts else "title"
+
     top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
 
     results = []
@@ -57,5 +74,6 @@ def search(query, papers, bm25, top_k=5):
         if cached:
             paper["abstract"] = cached["abstract"]
             paper["abstract_source"] = cached["source"]
+        paper["matched_on"] = search_field
         results.append(paper)
     return results
