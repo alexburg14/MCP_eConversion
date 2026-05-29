@@ -42,15 +42,16 @@ Checked Unpaywall for all 956 DOIs:
 - **412 papers (43.1%)** have a direct PDF URL available
 - **327 papers (34.2%)** are fully closed access — no legal free full-text
 
-### 7. Built a multi-source full-text pipeline (`build_fulltext_cache.py`)
-Per-DOI pipeline that queries four OA sources, deduplicates PDF URLs, and tries them in host-tier priority order:
+### 7. Built a multi-source full-text pipeline (`src/build_fulltext_cache.py`)
+Per-DOI pipeline that queries four OA sources plus NCBI's PMC API, deduplicates URLs, and tries paths in tier order:
 
 | Tier | Source | Why |
 |---|---|---|
-| 0 | **arXiv** (`arxiv.org/pdf/{id}`) | No bot-blocking, clean PDFs. arXiv ID is harvested from OpenAlex `ids.arxiv` or Semantic Scholar `externalIds.ArXiv` — S2 returns it even when `openAccessPdf` is empty, which is the key insight |
-| 1 | **Repository PDFs** (PMC, institutional repos) | Backup copies that survive when publisher PDFs 403 |
+| 0 | **arXiv** (`arxiv.org/pdf/{id}`) | No bot-blocking, clean PDFs. arXiv ID is harvested from OpenAlex `ids.arxiv`, Semantic Scholar `externalIds.ArXiv`, and (last resort) arXiv's own `query?search_query=doi:` API — S2 returns it even when `openAccessPdf` is empty, which is the key insight |
+| 0.5 | **PMC** (NCBI eutils efetch on `db=pmc`) | Structured JATS XML, no bot-blocking. The big rescue: papers funded by NIH/HHMI must be deposited in PubMed Central via the NIH Public Access Policy, so PMC holds free copies of many ACS/Wiley/JACS/Nature articles that the publisher still paywalls. PMCID is discovered via OpenAlex `ids.pmcid` or NCBI's idconv endpoint. JATS XML is rendered to markdown with a small ElementTree walker (sections + abstract + body; skips figures/tables/formulas). 138 of our 956 papers were recovered this way alone |
+| 1 | **Repository PDFs** (institutional repos, hal., edoc., pure., osti, etc.) | Backup copies that survive when publisher PDFs 403 |
 | 2 | **Publisher PDFs** (Nature, RSC, AIP usually OK; Wiley/ACS often 403) | Tried last because of bot-blocking |
-| (fallback) | HTML via `trafilatura` | Some publishers inline the full body in HTML (Nature OA, some ACS OA). `MIN_CHARS=3000` filters out abstract-only landing pages |
+| (fallback) | HTML via `trafilatura` | Some publishers inline the full body in HTML (Nature OA, some ACS OA, RSC, IOP). `MIN_CHARS=3000` filters out abstract-only landing pages |
 
 **Tools chosen:**
 - PDF → markdown: `pymupdf4llm` (lightweight, no ML models, ~50k chars per typical paper)
@@ -67,7 +68,7 @@ Per-DOI pipeline that queries four OA sources, deduplicates PDF URLs, and tries 
 
 **Smoke test (30-DOI random sample, seed 42)**: 60% success rate vs. 40% with single-source Unpaywall-only. arXiv recovered papers like `10.1103/physrevb.110.125202` that Unpaywall and OpenAlex both marked "closed".
 
-**Full run status**: 244/956 (25.5%) papers cached so far, mid-run. Run was interrupted by a network outage (visible in per-100-DOI bucket analysis as 0% stretches at positions 100-299 and 700-799). Retry resumes from cache — only retries the NOT FOUND DOIs. Expected final coverage: 350–550 papers (~45–55%) with avg ~90k chars of clean markdown body.
+**Full run status**: **402/956 (42.1%)** papers cached. Two passes: an initial run reached 244/956 (mostly arXiv + repository PDFs + publisher HTML), then a second pass after adding PMC tier 0.5 contributed +138 net new hits (almost all PMC), plus 1 HTML. Breakdown of the full cache: pdf 186 (arxiv 49, repository 27, publisher ~110), html 78, pmc 138. The 554 still-missing DOIs are dominated by DFG/ERC-funded EU chemistry/physics with no preprint and no PMC deposit — would need institutional access to recover. The arXiv-by-DOI fallback was added but contributed 0 hits on the residue (papers not exposed by OpenAlex/S2's arXiv metadata aren't found by arXiv's own DOI search either — kept anyway, costs one extra request when arXiv-empty).
 
 ---
 
@@ -83,7 +84,7 @@ Per-DOI pipeline that queries four OA sources, deduplicates PDF URLs, and tries 
 - **Author names are truncated** for papers with non-ASCII characters — this is a bug in the upstream scraper that would require a fix + re-scrape to fully resolve
 - **BM25 is still lexical** — conceptual queries with different vocabulary than the abstracts (e.g. synonyms) won't match; this requires semantic/embedding search to solve fully
 - **Single-user setup** — currently runs locally on one machine, not accessible cluster-wide
-- **Full-text coverage is partial** — ~40–60% of papers are retrievable (the rest are paywalled with no preprint, or behind aggressive bot-blocking we can't bypass without institutional access). Wiley/ACS are the dominant failure mode.
+- **Full-text coverage is partial** — 402/956 (42%) cached. The 554 remaining are dominated by DFG/ERC-funded EU chemistry/physics with no preprint and no PMC deposit; would need institutional access to recover. Wiley/ACS-without-NIH-funding is the dominant failure mode.
 - **Full text is not yet wired into search** — `fulltext_cache.json` is populated but `search_papers` still searches only abstracts. Next step: either extend BM25 to full text or let the LLM call `get_paper_fulltext` for top candidates.
 
 ---
@@ -96,8 +97,7 @@ Per-DOI pipeline that queries four OA sources, deduplicates PDF URLs, and tries 
 - **Keep cache fresh**: run `build_abstracts_cache.py` when new papers are published
 
 ### Medium term
-- **Finish the full-text run**: pipeline is mid-run with 244 papers cached. Just `python build_fulltext_cache.py` again — it skips cached DOIs and retries NOT FOUND ones.
-- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json`, or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits.
+- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 402 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
 - **Migrate from JSON to a database**: SQLite is the natural first step (same format as the `.enl`). PostgreSQL when cluster-wide concurrent access is needed.
 - **Semantic search**: add vector embeddings (e.g. `allenai/scibert`) as a third stage after the two-stage BM25 cascade, to handle synonym/conceptual queries. ~956 abstracts is small enough to embed cheaply.
 - **PDF extractor upgrade**: PyMuPDF4LLM is sufficient for plain prose. For papers with complex layouts/equations/tables, upgrade to Marker (ML-based, surya models ~1-2GB) or MinerU (heaviest, best quality).
@@ -110,14 +110,16 @@ Per-DOI pipeline that queries four OA sources, deduplicates PDF URLs, and tries 
 ---
 
 ## Key Files
+Repo is split into `src/` (code, tracked) and `data/` (caches and source data, gitignored).
+
 | File | Purpose |
 |---|---|
-| `server.py` | MCP server — exposes `search_papers` and `get_paper_by_doi` tools |
-| `search.py` | Two-stage BM25 search (title → abstract fallback) + abstract cache reader |
-| `abstracts_cache.json` | 952 abstracts keyed by DOI |
-| `build_abstracts_cache.py` | Rebuilds the cache from .enl + API fallback |
-| `data_publication_dois.csv` | 956 papers + 148 dataset links |
-| `e-conversion-Converted.enl` | Source EndNote library (SQLite) |
-| `build_fulltext_cache.py` | Fetches full text via Unpaywall → HTML (trafilatura) or PDF (PyMuPDF4LLM) |
-| `fulltext_cache.json` | Full text keyed by DOI (built by build_fulltext_cache.py) |
-| `scraper_cache.json` | Raw scraper output from e-conversion.de |
+| `src/server.py` | MCP server — exposes `search_papers`, `get_paper_by_doi`, `get_paper_fulltext` |
+| `src/search.py` | Two-stage BM25 search (title → abstract fallback) + abstract cache reader |
+| `src/build_abstracts_cache.py` | Rebuilds abstracts cache from .enl + API fallback |
+| `src/build_fulltext_cache.py` | Multi-source full-text pipeline: arXiv → PMC (JATS XML) → repos → publisher PDFs → HTML fallback |
+| `data/abstracts_cache.json` | 952 abstracts keyed by DOI |
+| `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI (source: pdf / html / pmc) |
+| `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
+| `data/e-conversion-Converted.enl` | Source EndNote library (SQLite) |
+| `data/scraper_cache.json` | Raw scraper output from e-conversion.de |
