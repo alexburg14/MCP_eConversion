@@ -8,6 +8,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 - **952 abstracts (99.6% coverage)** cached locally — no API calls at search time
 - **402 full-text bodies (42.1% coverage)** cached locally, harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs, and HTML landing pages
 - **148 dataset links** (e.g. crystal structures in CSD/CCDC) attached to their parent papers
+- **42 PIs** scraped from `e-conversion.de/members/` with group, department, institution, research focus, application fields, and (where listed) their publication DOIs — links each PI to their papers in the cache
 - **Two-stage BM25 search** — searches titles first, falls back to abstracts when the abstract index scores higher (handles both precise and conceptual queries)
 
 ## MCP tools
@@ -54,6 +55,14 @@ python src/build_fulltext_cache.py
 
 Per-DOI pipeline that tries sources in tier order: arXiv → PMC (NCBI eutils, JATS XML) → repository PDFs → publisher PDFs → HTML fallback (`trafilatura`). Already-cached DOIs are skipped; only NOT-FOUND DOIs are retried. Writes a checkpoint every 50 papers so the run is safe to interrupt.
 
+**PIs** — scrapes the eConversion members directory and each individual staff page:
+
+```bash
+python src/build_pis_cache.py
+```
+
+Writes `data/pis_cache.json` with one entry per PI. Re-run anytime the members list changes; pass `--force` to refresh existing entries.
+
 ## Files
 
 | File | Purpose |
@@ -62,8 +71,10 @@ Per-DOI pipeline that tries sources in tier order: arXiv → PMC (NCBI eutils, J
 | `src/search.py` | Two-stage BM25 search engine + abstract cache reader |
 | `src/build_abstracts_cache.py` | Rebuilds `data/abstracts_cache.json` from `.enl` + OpenAlex fallback |
 | `src/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |
+| `src/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/pis_cache.json` |
 | `data/abstracts_cache.json` | 952 abstracts keyed by DOI |
 | `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI |
+| `data/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
 | `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
 | `data/e-conversion-Converted.enl` | Source EndNote library (SQLite format) |
 | `data/scraper_cache.json` | Raw scraper output from e-conversion.de |

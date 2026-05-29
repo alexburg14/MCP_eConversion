@@ -70,6 +70,15 @@ Per-DOI pipeline that queries four OA sources plus NCBI's PMC API, deduplicates 
 
 **Full run status**: **402/956 (42.1%)** papers cached. Two passes: an initial run reached 244/956 (mostly arXiv + repository PDFs + publisher HTML), then a second pass after adding PMC tier 0.5 contributed +138 net new hits (almost all PMC), plus 1 HTML. Breakdown of the full cache: pdf 186 (arxiv 49, repository 27, publisher ~110), html 78, pmc 138. The 554 still-missing DOIs are dominated by DFG/ERC-funded EU chemistry/physics with no preprint and no PMC deposit — would need institutional access to recover. The arXiv-by-DOI fallback was added but contributed 0 hits on the residue (papers not exposed by OpenAlex/S2's arXiv metadata aren't found by arXiv's own DOI search either — kept anyway, costs one extra request when arXiv-empty).
 
+### 8. Scraped the PI / group metadata layer (`src/build_pis_cache.py`)
+Driven by the 2026-05-18 meeting's pivot from "search papers" to "find people and groups". The eConversion website lists 42 PIs at `/members/`, with one `single-staff-page?smid=N` per PI. Both pages are server-side rendered HTML, no API and no JS gating — straight `requests` + regex.
+
+Per PI we capture: name (title/first/last), group, department, institution (TUM/LMU/FHI/MPI FKF), group website, profile image, **Academic Research Focus** bullets, **Fields of Application** tags, and **publication DOIs** harvested from the staff page's Publications section. The DOI list gives PI → papers linkage for free — 34/42 PIs list publications (2,296 unique DOIs across the cluster), which intersects directly with the abstract/full-text caches.
+
+Data gaps surfaced (not parser bugs): three FHI/MPI PIs (Reuter, Roldán Cuenya, Scheurer) have no group field on their listing card — the site collapses group into department for non-TUM/LMU affiliates. Scheurer additionally has no Academic Research Focus and no institution on his profile — captured as empty rather than fabricated.
+
+Output: `data/pis_cache.json`. Not yet wired into the MCP server.
+
 ---
 
 ## What Worked
@@ -92,9 +101,10 @@ Per-DOI pipeline that queries four OA sources plus NCBI's PMC API, deduplicates 
 ## What Comes Next
 
 ### Short term
+- **Wire PIs into the MCP server**: add `get_pi(name_or_query)` and `list_pis_by_field(area)` tools so test queries like "Wer ist Patrick Rinke?" and "Wie finde ich die Person die X macht?" actually work. The `publication_dois` field lets `get_pi` also surface that PI's papers from the existing abstract cache.
 - **Add more MCP tools**: `list_papers(year, author)` for browsing
 - **Fix author names**: fetch full author lists from OpenAlex to replace truncated names in the CSV
-- **Keep cache fresh**: run `build_abstracts_cache.py` when new papers are published
+- **Keep caches fresh**: run `build_abstracts_cache.py` and `build_pis_cache.py` when the website changes
 
 ### Medium term
 - **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 402 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
@@ -118,8 +128,10 @@ Repo is split into `src/` (code, tracked) and `data/` (caches and source data, g
 | `src/search.py` | Two-stage BM25 search (title → abstract fallback) + abstract cache reader |
 | `src/build_abstracts_cache.py` | Rebuilds abstracts cache from .enl + API fallback |
 | `src/build_fulltext_cache.py` | Multi-source full-text pipeline: arXiv → PMC (JATS XML) → repos → publisher PDFs → HTML fallback |
+| `src/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and per-PI staff pages into `data/pis_cache.json` |
 | `data/abstracts_cache.json` | 952 abstracts keyed by DOI |
 | `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI (source: pdf / html / pmc) |
+| `data/pis_cache.json` | 42 PIs keyed by smid (name, group, dept, institution, research focus, application fields, publication DOIs) |
 | `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
 | `data/e-conversion-Converted.enl` | Source EndNote library (SQLite) |
 | `data/scraper_cache.json` | Raw scraper output from e-conversion.de |
