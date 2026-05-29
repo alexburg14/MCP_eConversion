@@ -3,3 +3,5 @@ __pycache__/
 Meeting eConversion.md
 fulltext_run.log
 .venv/
+CLAUDE.md
+data/
