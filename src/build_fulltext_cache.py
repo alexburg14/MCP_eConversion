@@ -16,9 +16,11 @@ Run incrementally — DOIs already in the cache are skipped unless --force is pa
 """
 import csv
 import json
+import re
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 import requests
 import trafilatura
 import pymupdf4llm
@@ -26,9 +28,9 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
-BASE = Path(__file__).parent
-CSV = BASE / "data_publication_dois.csv"
-OUTPUT = BASE / "fulltext_cache.json"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+CSV = DATA_DIR / "data_publication_dois.csv"
+OUTPUT = DATA_DIR / "fulltext_cache.json"
 EMAIL = "audit@econversion.de"
 MIN_CHARS = 3000  # full articles are typically 10k+ chars; this filters landing pages
 FORCE = "--force" in sys.argv
@@ -95,7 +97,7 @@ def fetch_unpaywall(doi):
 
 
 def fetch_openalex(doi):
-    """Return (pdf_urls, arxiv_id_or_None) from OpenAlex."""
+    """Return (pdf_urls, arxiv_id_or_None, pmcid_or_None) from OpenAlex."""
     try:
         r = requests.get(
             f"https://api.openalex.org/works/https://doi.org/{doi}",
@@ -103,10 +105,10 @@ def fetch_openalex(doi):
             timeout=15,
         )
         if r.status_code != 200:
-            return [], None
+            return [], None, None
         data = r.json()
     except Exception:
-        return [], None
+        return [], None, None
 
     pdf_urls = []
     for loc in (data.get("locations") or []):
@@ -117,12 +119,23 @@ def fetch_openalex(doi):
     if best:
         pdf_urls.append(best)
 
+    ids = data.get("ids") or {}
     arxiv_id = None
-    arxiv_field = (data.get("ids") or {}).get("arxiv")
+    arxiv_field = ids.get("arxiv")
     if arxiv_field:
         # Sometimes returned as a full URL, sometimes just the ID
         arxiv_id = arxiv_field.split("/")[-1].replace("arXiv:", "").strip()
-    return pdf_urls, arxiv_id
+
+    # OpenAlex exposes PMCID in ids.pmcid as a full URL like
+    # "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1234567"
+    pmcid = None
+    pmcid_field = ids.get("pmcid")
+    if pmcid_field:
+        m = re.search(r"PMC\d+", pmcid_field)
+        if m:
+            pmcid = m.group(0)
+
+    return pdf_urls, arxiv_id, pmcid
 
 
 def fetch_semantic_scholar(doi):
@@ -144,6 +157,137 @@ def fetch_semantic_scholar(doi):
     return pdf, arxiv_id
 
 
+def fetch_arxiv_id_by_doi(doi):
+    """Search arXiv's API for a preprint matching this DOI. Returns arxiv_id or None.
+
+    Many authors cross-list the published DOI on their arXiv submission; arXiv's
+    query API exposes that. This catches preprints that neither OpenAlex nor S2
+    surface as `ids.arxiv` / `externalIds.ArXiv`.
+    """
+    try:
+        r = requests.get(
+            "http://export.arxiv.org/api/query",
+            params={"search_query": f"doi:{doi}", "max_results": 1},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None
+        # Atom feed: extract the first <id> after the feed-level <id>
+        # entry id looks like "http://arxiv.org/abs/2301.12345v2"
+        m = re.search(r"<entry>.*?<id>http://arxiv\.org/abs/([^<]+)</id>", r.text, re.DOTALL)
+        if not m:
+            return None
+        # Strip version suffix; the bare ID works for /pdf/<id>
+        return re.sub(r"v\d+$", "", m.group(1)).strip()
+    except Exception:
+        return None
+
+
+def _jats_to_markdown(xml_text):
+    """Render a JATS <article> XML body to plain markdown.
+
+    Emits the article title (H1), abstract (H2), and section bodies with nested
+    heading depth. Skips floats (figures, tables, formulas) — they don't carry
+    over usefully into plain text and trafilatura-comparable output is the goal.
+    """
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+    article = root.find(".//article")
+    if article is None:
+        return None
+
+    out = []
+    title = article.findtext(".//front//article-title")
+    if title:
+        out.append(f"# {title.strip()}")
+    for abs_el in article.findall(".//front//abstract"):
+        out.append("\n## Abstract")
+        out.append(_walk_jats(abs_el, depth=2))
+    body = article.find("body")
+    if body is not None:
+        out.append(_walk_jats(body, depth=1))
+    return "\n\n".join(p for p in out if p and p.strip())
+
+
+def _walk_jats(el, depth=1):
+    parts = []
+    for child in el:
+        tag = child.tag
+        if tag == "sec":
+            t = child.findtext("title")
+            if t:
+                parts.append(f'\n{"#" * min(depth + 1, 6)} {t.strip()}')
+            parts.append(_walk_jats(child, depth=depth + 1))
+        elif tag == "title":
+            continue  # handled by parent sec
+        elif tag == "p":
+            parts.append("".join(child.itertext()).strip())
+        elif tag in ("list", "disp-quote"):
+            parts.append("".join(child.itertext()).strip())
+        elif tag in ("fig", "table-wrap", "disp-formula"):
+            continue
+        else:
+            parts.append(_walk_jats(child, depth=depth))
+    return "\n\n".join(p for p in parts if p and p.strip())
+
+
+def fetch_pmc(doi, pmcid=None):
+    """Try to get full text from PubMed Central. Returns markdown or None.
+
+    PMC holds NIH/HHMI-deposited author manuscripts even when the publisher
+    paywalls the typeset version, so this rescues a meaningful fraction of
+    ACS/Wiley/Nature papers that the URL pipeline can't reach.
+
+    Discovery: uses the caller-supplied PMCID if known (from OpenAlex), else
+    queries NCBI's idconv endpoint with the DOI.
+    """
+    if not pmcid:
+        try:
+            r = requests.get(
+                "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+                params={
+                    "ids": doi,
+                    "format": "json",
+                    "tool": "econversion",
+                    "email": EMAIL,
+                },
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return None
+            records = (r.json().get("records") or [])
+            if not records or not records[0].get("pmcid"):
+                return None
+            pmcid = records[0]["pmcid"]
+        except Exception:
+            return None
+
+    pmc_num = pmcid.replace("PMC", "").strip()
+    try:
+        r = requests.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            params={
+                "db": "pmc",
+                "id": pmc_num,
+                "rettype": "full",
+                "tool": "econversion",
+                "email": EMAIL,
+            },
+            timeout=30,
+        )
+        if r.status_code != 200:
+            return None
+    except Exception:
+        return None
+
+    md = _jats_to_markdown(r.text)
+    if md and len(md) >= MIN_CHARS:
+        return {"fulltext": md, "pmcid": pmcid}
+    return None
+
+
 def _expand_urls(urls):
     """For URLs with query strings, also add the bare variant.
     Some publishers (e.g. science.org) reject ?download=true but serve the bare URL."""
@@ -156,19 +300,27 @@ def _expand_urls(urls):
 
 
 def collect_urls(doi):
-    """Query all sources, dedupe, sort PDFs by host tier. Returns (pdf_urls, html_urls)."""
+    """Query all sources. Returns (pdf_urls, html_urls, pmcid_or_None).
+
+    pdf_urls are deduped and sorted by host tier (arXiv first, then repos,
+    then publishers). The pmcid (if any) is surfaced separately so the caller
+    can try PMC's structured-XML path between arXiv and the repo URLs.
+    """
     pdf_urls, html_urls = [], []
     arxiv_ids = set()
+    pmcid = None
 
     up_pdfs, up_htmls = fetch_unpaywall(doi)
     pdf_urls += up_pdfs
     html_urls += up_htmls
     time.sleep(API_SLEEP)
 
-    oa_pdfs, oa_arxiv = fetch_openalex(doi)
+    oa_pdfs, oa_arxiv, oa_pmcid = fetch_openalex(doi)
     pdf_urls += oa_pdfs
     if oa_arxiv:
         arxiv_ids.add(oa_arxiv)
+    if oa_pmcid:
+        pmcid = oa_pmcid
     time.sleep(API_SLEEP)
 
     s2_pdf, s2_arxiv = fetch_semantic_scholar(doi)
@@ -178,6 +330,15 @@ def collect_urls(doi):
         arxiv_ids.add(s2_arxiv)
     time.sleep(API_SLEEP)
 
+    # Last-resort arXiv lookup: query arXiv's own API by DOI for cases where
+    # neither OpenAlex nor S2 surfaced an arXiv ID. Cheap (one request) and
+    # only fires when the other sources came up empty.
+    if not arxiv_ids:
+        arxiv_id = fetch_arxiv_id_by_doi(doi)
+        if arxiv_id:
+            arxiv_ids.add(arxiv_id)
+        time.sleep(API_SLEEP)
+
     for aid in arxiv_ids:
         pdf_urls.append(f"https://arxiv.org/pdf/{aid}")
 
@@ -185,7 +346,7 @@ def collect_urls(doi):
     pdf_urls = list(dict.fromkeys(pdf_urls))
     pdf_urls.sort(key=host_tier)
     html_urls = list(dict.fromkeys(html_urls))
-    return pdf_urls, html_urls
+    return pdf_urls, html_urls, pmcid
 
 
 def extract_pdf(url):
@@ -226,10 +387,39 @@ def extract_html(url):
 
 
 def fetch_fulltext(doi):
-    """Try every candidate URL in priority order. Returns dict with text/url/source or None."""
-    pdf_urls, html_urls = collect_urls(doi)
+    """Try every candidate URL in priority order. Returns dict with text/url/source or None.
 
-    for url in pdf_urls:
+    Order: arXiv PDFs (tier 0) → PMC structured XML (tier 0.5) → repo PDFs
+    (tier 1) → publisher PDFs (tier 2) → HTML fallback.
+    """
+    pdf_urls, html_urls, pmcid = collect_urls(doi)
+
+    # Tier 0: arXiv PDFs first (clean, no bot-blocking).
+    arxiv_urls = [u for u in pdf_urls if host_tier(u) == 0]
+    rest_urls = [u for u in pdf_urls if host_tier(u) != 0]
+    for url in arxiv_urls:
+        text = extract_pdf(url)
+        if text:
+            return {
+                "fulltext": text,
+                "source": "pdf",
+                "source_origin": _origin(url),
+                "url": url,
+            }
+
+    # Tier 0.5: PMC eutils. Structured JATS XML, often rescues NIH-funded
+    # papers that publishers (ACS/Wiley/Nature) paywall.
+    pmc_result = fetch_pmc(doi, pmcid=pmcid)
+    if pmc_result:
+        return {
+            "fulltext": pmc_result["fulltext"],
+            "source": "pmc",
+            "source_origin": "pmc",
+            "url": f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmc_result['pmcid']}/",
+        }
+
+    # Tiers 1 and 2: repository then publisher PDFs (already sorted by host_tier).
+    for url in rest_urls:
         text = extract_pdf(url)
         if text:
             return {
@@ -273,8 +463,8 @@ def main():
     print(f"To fetch:       {len(to_fetch)}\n")
 
     today = str(date.today())
-    counts = {"pdf": 0, "html": 0, "not_found": 0}
-    origins = {"arxiv": 0, "repository": 0, "publisher": 0}
+    counts = {"pdf": 0, "html": 0, "pmc": 0, "not_found": 0}
+    origins = {"arxiv": 0, "pmc": 0, "repository": 0, "publisher": 0}
 
     for i, doi in enumerate(to_fetch, 1):
         result = fetch_fulltext(doi)
@@ -300,14 +490,16 @@ def main():
     with open(OUTPUT, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
-    found = counts["pdf"] + counts["html"]
+    found = counts["pdf"] + counts["html"] + counts["pmc"]
     print(f"\nCache written to {OUTPUT.name}")
     print(f"Total: {len(cache)}/{len(dois)} papers ({100*len(cache)/len(dois):.1f}%)")
     print(f"  pdf:       {counts['pdf']}")
     print(f"  html:      {counts['html']}")
+    print(f"  pmc:       {counts['pmc']}")
     print(f"  not found: {counts['not_found']}")
     print(f"Origin of winning URL:")
     print(f"  arxiv:      {origins['arxiv']}")
+    print(f"  pmc:        {origins['pmc']}")
     print(f"  repository: {origins['repository']}")
     print(f"  publisher:  {origins['publisher']}")
     if to_fetch:
