@@ -1,3 +1,5 @@
 .claude/settings.local.json
 __pycache__/
 Meeting eConversion.md
+fulltext_run.log
+.venv/

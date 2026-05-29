@@ -1,3 +1,9 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -c \"import trafilatura; import pymupdf4llm; print\\('both imported OK'\\)\")",
+      "Bash(.venv/bin/pip install *)"
+    ]
+  },
   "enableAllProjectMcpServers": true
 }
