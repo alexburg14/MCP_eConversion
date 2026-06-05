@@ -35,6 +35,15 @@ To run it manually:
 python src/server.py
 ```
 
+## Chat interface
+
+A Streamlit web app that lets researchers ask questions in natural language. It calls the search tools internally and uses Claude to synthesize answers. Requires an Anthropic API key.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+streamlit run src/app.py
+```
+
 ## Layout
 
 Code lives under `src/`; data caches and source files live under `data/`. The `data/` directory is gitignored — caches must be built locally (see below).

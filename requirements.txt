@@ -3,3 +3,6 @@ requests
 mcp
 trafilatura
 pymupdf4llm
+# chat interface
+anthropic
+streamlit
