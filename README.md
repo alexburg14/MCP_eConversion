@@ -18,6 +18,8 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 | `search_papers(query)` | Returns the top 5 papers matching the query, with titles, authors, year, abstracts, and any linked datasets. Each result includes a `matched_on` field (`title` or `abstract`) indicating which index fired. |
 | `get_paper_by_doi(doi)` | Direct lookup — returns full metadata and abstract for a single paper. |
 | `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Only available for the ~42% of papers covered by the full-text cache. |
+| `search_pis(query)` | Keyword search across PI names, groups, research focus, and application fields. Returns the top 5 matching PIs with group, institution, research focus, and publication count. |
+| `get_pi(name)` | Profile lookup for a PI by last name, full name, or keyword. Returns full details plus up to 10 linked papers from the abstract cache. |
 
 ## Setup
 

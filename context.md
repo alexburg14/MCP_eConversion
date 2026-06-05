@@ -77,7 +77,7 @@ Per PI we capture: name (title/first/last), group, department, institution (TUM/
 
 Data gaps surfaced (not parser bugs): three FHI/MPI PIs (Reuter, Roldán Cuenya, Scheurer) have no group field on their listing card — the site collapses group into department for non-TUM/LMU affiliates. Scheurer additionally has no Academic Research Focus and no institution on his profile — captured as empty rather than fabricated.
 
-Output: `data/pis_cache.json`. Not yet wired into the MCP server.
+Output: `data/pis_cache.json`. Wired into the MCP server via `search_pis(query)` and `get_pi(name)` tools (2026-06-05).
 
 ---
 
@@ -101,7 +101,7 @@ Output: `data/pis_cache.json`. Not yet wired into the MCP server.
 ## What Comes Next
 
 ### Short term
-- **Wire PIs into the MCP server**: add `get_pi(name_or_query)` and `list_pis_by_field(area)` tools so test queries like "Wer ist Patrick Rinke?" and "Wie finde ich die Person die X macht?" actually work. The `publication_dois` field lets `get_pi` also surface that PI's papers from the existing abstract cache.
+- ~~**Wire PIs into the MCP server**~~ Done 2026-06-05: `search_pis(query)` and `get_pi(name)` are live. The "Wer ist Patrick Rinke?" user story works end-to-end.
 - **Add more MCP tools**: `list_papers(year, author)` for browsing
 - **Fix author names**: fetch full author lists from OpenAlex to replace truncated names in the CSV
 - **Keep caches fresh**: run `build_abstracts_cache.py` and `build_pis_cache.py` when the website changes
