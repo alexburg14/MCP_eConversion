@@ -94,7 +94,7 @@ _TOOLS = [
     },
 ]
 
-_SYSTEM = """\
+_BASE_SYSTEM = """\
 You are a research assistant for the e-conversion energy research cluster, \
 a consortium of ~42 research groups at TUM, LMU, FHI, and MPI focused on energy conversion.
 
@@ -105,6 +105,27 @@ the database, say so clearly — do not invent facts.
 
 Answer in the same language as the question (German or English).\
 """
+
+_PROPOSAL_SUMMARY_PATH = Path(__file__).resolve().parent.parent / "data" / "proposal_summary.md"
+
+
+def _build_system_prompt() -> str:
+    """Compose the system prompt, appending the e-conversion 2.0 proposal summary if present."""
+    if _PROPOSAL_SUMMARY_PATH.exists():
+        summary = _PROPOSAL_SUMMARY_PATH.read_text(encoding="utf-8")
+        return (
+            _BASE_SYSTEM
+            + "\n\nThe following is Section 2 of the e-conversion 2.0 DFG proposal "
+            + "(\"Summary of the Proposal\"), describing the cluster's scope, motivation, "
+            + "and research approach. Use it as background context.\n\n"
+            + "<proposal_summary>\n"
+            + summary
+            + "\n</proposal_summary>"
+        )
+    return _BASE_SYSTEM
+
+
+_SYSTEM = _build_system_prompt()
 
 
 def _dispatch(name: str, inputs: dict) -> str:
