@@ -1,4 +1,6 @@
 import json
+import re
+import unicodedata
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from search import load_papers, build_index, search, _ABSTRACTS
@@ -25,8 +27,20 @@ if PIS_CACHE_PATH.exists():
         _PIS = json.load(_f)
 
 
-def _pi_text(pi: dict) -> str:
-    """Concatenate all searchable fields of a PI into one lowercase string."""
+def _fold(s: str) -> str:
+    """Lowercase + strip accents (NFKD). 'Müller' -> 'muller', 'Cortés' -> 'cortes'."""
+    if not s:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", s)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+
+
+def _pi_words(pi: dict) -> set[str]:
+    """Set of accent-folded word tokens from all searchable fields of a PI.
+
+    Word-token (not substring) matching: 'Müller-Buschbaum' -> {'muller','buschbaum'},
+    'Koblmüller' stays {'koblmuller'} — so a 'muller' query no longer pulls Koblmüller.
+    """
     parts = [
         pi.get("name", ""),
         pi.get("group", ""),
@@ -35,12 +49,38 @@ def _pi_text(pi: dict) -> str:
         " ".join(pi.get("research_focus", [])),
         " ".join(pi.get("application_fields", [])),
     ]
-    return " ".join(parts).lower()
+    folded = _fold(" ".join(parts))
+    return set(re.findall(r"\w+", folded))
+
+
+# Words too common across PI text fields to be useful as match signal.
+# Kept tiny on purpose — anything domain-specific (e.g. 'group', 'energy') stays in
+# so legitimate queries like 'energy conversion' still work.
+_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "this", "that", "are", "was", "were",
+    "but", "not", "you", "all", "any", "can", "has", "have", "had", "their",
+    "they", "them", "its", "into", "over", "such", "than", "then", "these",
+    "those", "which", "who", "whom", "what", "when", "where", "why", "how",
+})
+
+
+def _query_tokens(query: str, min_len: int = 3) -> list[str]:
+    """Accent-fold the query, split on word boundaries, drop short tokens and stopwords.
+
+    The min-length filter handles trivial noise ('a', 'of', 'in'); the stopword set
+    handles common 3+ letter English fillers ('the', 'and', 'for') that otherwise
+    match nearly every PI's research description.
+    """
+    folded = _fold(query)
+    return [
+        t for t in re.findall(r"\w+", folded)
+        if len(t) >= min_len and t not in _STOPWORDS
+    ]
 
 
 def _score_pi(pi: dict, tokens: list[str]) -> int:
-    text = _pi_text(pi)
-    return sum(1 for t in tokens if t in text)
+    words = _pi_words(pi)
+    return sum(1 for t in tokens if t in words)
 
 
 def _pi_summary(pi: dict) -> dict:
@@ -98,10 +138,16 @@ def search_papers(query: str) -> str:
 @mcp.tool()
 def search_pis(query: str) -> str:
     """Search e-conversion PIs (principal investigators) by name, research area, or keyword.
-    Returns the top 5 matching PIs with their group, institution, research focus, and publication count."""
-    tokens = query.lower().split()
-    if not tokens:
+    Returns the top 5 matching PIs with their group, institution, research focus, and publication count.
+    Accent-insensitive: 'muller' matches 'Müller-Buschbaum'."""
+    if not query or not query.strip():
         return json.dumps({"error": "Query must not be empty."})
+    tokens = _query_tokens(query)
+    if not tokens:
+        return json.dumps({
+            "results": [],
+            "message": "Query contained no usable tokens (all were too short or stopwords).",
+        })
     scored = [(pi, _score_pi(pi, tokens)) for pi in _PIS]
     scored = [(pi, s) for pi, s in scored if s > 0]
     scored.sort(key=lambda x: x[1], reverse=True)
@@ -115,27 +161,36 @@ def search_pis(query: str) -> str:
 def get_pi(name: str) -> str:
     """Return full profile for a PI by name (last name or full name).
     Includes group, institution, research focus, application fields, website, and their publications
-    (titles + abstracts) from the cache."""
-    query = name.strip().lower()
-    best = None
-    best_score = 0
+    (titles + abstracts) from the cache. Accent-insensitive: 'Cortes' matches 'Cortés'."""
+    if not name or not name.strip():
+        return json.dumps({"error": "Name must not be empty."})
 
-    # Prefer exact last-name match
-    for pi in _PIS:
-        if pi.get("last_name", "").lower() == query:
-            best = pi
-            break
+    query = _fold(name.strip())
 
-    # Fall back to substring match on full name
+    # 1. Exact last-name match (accent-folded). Collect ALL — two PIs share 'Stein'.
+    exact = [pi for pi in _PIS if _fold(pi.get("last_name", "")) == query]
+    if len(exact) > 1:
+        return json.dumps({
+            "error": f"Multiple PIs share the last name '{name}'. Specify the full name.",
+            "matches": [_pi_summary(pi) for pi in exact],
+        }, indent=2, ensure_ascii=False)
+    best = exact[0] if exact else None
+
+    # 2. Substring match on the full (folded) name.
     if best is None:
-        for pi in _PIS:
-            if query in pi.get("name", "").lower():
-                best = pi
-                break
+        subs = [pi for pi in _PIS if query in _fold(pi.get("name", ""))]
+        if len(subs) > 1:
+            return json.dumps({
+                "error": f"Multiple PIs match '{name}'. Specify the full name.",
+                "matches": [_pi_summary(pi) for pi in subs],
+            }, indent=2, ensure_ascii=False)
+        if subs:
+            best = subs[0]
 
-    # Fall back to keyword scoring across all fields
+    # 3. Keyword scoring across all fields (token-boundary, accent-folded).
     if best is None:
-        tokens = query.split()
+        tokens = _query_tokens(name)
+        best_score = 0
         for pi in _PIS:
             s = _score_pi(pi, tokens)
             if s > best_score:
