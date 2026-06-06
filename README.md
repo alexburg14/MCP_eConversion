@@ -65,6 +65,14 @@ python src/build_pis_cache.py
 
 Writes `data/pis_cache.json` with one entry per PI. Re-run anytime the members list changes; pass `--force` to refresh existing entries.
 
+**Proposal summary** — one-shot extraction of Section 2 of the e-conversion 2.0 DFG proposal, used as system-prompt context in the chat interface:
+
+```bash
+python src/extract_proposal_summary.py
+```
+
+Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_summary.md` (~1.5K tokens). Re-run only if the proposal PDF changes.
+
 ## Files
 
 | File | Purpose |
@@ -74,10 +82,13 @@ Writes `data/pis_cache.json` with one entry per PI. Re-run anytime the members l
 | `src/build_abstracts_cache.py` | Rebuilds `data/abstracts_cache.json` from `.enl` + OpenAlex fallback |
 | `src/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |
 | `src/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/pis_cache.json` |
+| `src/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/proposal_summary.md` |
 | `data/abstracts_cache.json` | 952 abstracts keyed by DOI |
 | `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI |
 | `data/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
 | `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
 | `data/e-conversion-Converted.enl` | Source EndNote library (SQLite format) |
 | `data/scraper_cache.json` | Raw scraper output from e-conversion.de |
+| `data/EXC_2089_e-conversion_A_Proposal_R.pdf` | Source PDF of the e-conversion 2.0 DFG proposal |
+| `data/proposal_summary.md` | Section 2 of the proposal, extracted for chat-interface system context |
 | `.mcp.json` | Claude Code MCP server registration |
