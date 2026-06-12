@@ -28,7 +28,7 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 CSV = DATA_DIR / "data_publication_dois.csv"
 OUTPUT = DATA_DIR / "fulltext_cache.json"
 EMAIL = "audit@econversion.de"

@@ -5,18 +5,21 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 ## What it does
 
 - **956 publications** scraped from `e-conversion.de/publikationen`
-- **952 abstracts (99.6% coverage)** cached locally — no API calls at search time
+- **953 abstracts (99.7% coverage)** cached locally — no API calls at search time
 - **402 full-text bodies (42.1% coverage)** cached locally, harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs, and HTML landing pages
 - **148 dataset links** (e.g. crystal structures in CSD/CCDC) attached to their parent papers
 - **42 PIs** scraped from `e-conversion.de/members/` with group, department, institution, research focus, application fields, and (where listed) their publication DOIs — links each PI to their papers in the cache
 - **Two-stage BM25 search** — searches titles first, falls back to abstracts when the abstract index scores higher (handles both precise and conceptual queries)
+- **Semantic search** — BGE-small embeddings over titles + abstracts as a parallel retrieval path for conceptual / synonym queries that lexical BM25 misses
+- **OpenAlex metadata** — full author lists (replaces truncated CSV names), journal/venue, and citation counts, stored alongside each abstract
 
 ## MCP tools
 
 | Tool | Description |
 |---|---|
-| `search_papers(query)` | Returns the top 5 papers matching the query, with titles, authors, year, abstracts, and any linked datasets. Each result includes a `matched_on` field (`title` or `abstract`) indicating which index fired. |
-| `get_paper_by_doi(doi)` | Direct lookup — returns full metadata and abstract for a single paper. |
+| `search_papers(query)` | Lexical (BM25) search — top 5 papers with titles, authors, year, abstracts, and any linked datasets. Best for exact terminology, acronyms, author names. `matched_on` (`title` / `abstract`) indicates which index fired. |
+| `semantic_search_papers(query)` | Semantic (embedding) search — top 5 papers ranked by cosine similarity over BGE-small embeddings. Best for conceptual queries where wording may differ from the abstracts. |
+| `get_paper_by_doi(doi)` | Direct lookup — returns full metadata and abstract for a single paper. When OpenAlex metadata is cached, includes the full author list, journal, and citation count. |
 | `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Only available for the ~42% of papers covered by the full-text cache. |
 | `search_pis(query)` | Keyword search across PI names, groups, research focus, and application fields. Returns the top 5 matching PIs with group, institution, research focus, and publication count. |
 | `get_pi(name)` | Profile lookup for a PI by last name, full name, or keyword. Returns full details plus up to 10 linked papers from the abstract cache. |
@@ -46,22 +49,22 @@ streamlit run src/app.py
 
 ## Layout
 
-Code lives under `src/`; data caches and source files live under `data/`. The `data/` directory is gitignored — caches must be built locally (see below).
+Runtime code (server, search, chat app) lives under `src/`; one-shot build and extract scripts live under `src/scripts/`; data caches and source files live under `data/`. The `data/` directory is gitignored — caches must be built locally (see below).
 
 ## Rebuilding the caches
 
-**Abstracts** — when new papers are added to the publication list:
+**Abstracts + metadata** — when new papers are added, or to refresh citation counts:
 
 ```bash
-python src/build_abstracts_cache.py
+python src/scripts/build_abstracts_cache.py
 ```
 
-Pulls from the local `.enl` EndNote library first (905 papers), then OpenAlex for any remaining DOIs.
+Abstracts come from the local `.enl` EndNote library first (905 papers), then OpenAlex, then Semantic Scholar. OpenAlex is queried once per DOI regardless, supplying the full author list (the CSV's author column is truncated for non-ASCII surnames), journal, and citation count in the same cache entry. Full rebuild, ~956 API calls, 3–5 min.
 
 **Full text** — incremental, resumable:
 
 ```bash
-python src/build_fulltext_cache.py
+python src/scripts/build_fulltext_cache.py
 ```
 
 Per-DOI pipeline that tries sources in tier order: arXiv → PMC (NCBI eutils, JATS XML) → repository PDFs → publisher PDFs → HTML fallback (`trafilatura`). Already-cached DOIs are skipped; only NOT-FOUND DOIs are retried. Writes a checkpoint every 50 papers so the run is safe to interrupt.
@@ -69,15 +72,23 @@ Per-DOI pipeline that tries sources in tier order: arXiv → PMC (NCBI eutils, J
 **PIs** — scrapes the eConversion members directory and each individual staff page:
 
 ```bash
-python src/build_pis_cache.py
+python src/scripts/build_pis_cache.py
 ```
 
 Writes `data/pis_cache.json` with one entry per PI. Re-run anytime the members list changes; pass `--force` to refresh existing entries.
 
+**Embeddings** — dense vectors for `semantic_search_papers`:
+
+```bash
+python src/scripts/build_embeddings_cache.py
+```
+
+Encodes `title + abstract` for every paper in the abstract cache with `BAAI/bge-small-en-v1.5` (384-d, L2-normalised) and writes `data/embeddings_cache.npz`. Re-run only when the abstract cache changes. First run downloads the model (~130 MB).
+
 **Proposal summary** — one-shot extraction of Section 2 of the e-conversion 2.0 DFG proposal, used as system-prompt context in the chat interface:
 
 ```bash
-python src/extract_proposal_summary.py
+python src/scripts/extract_proposal_summary.py
 ```
 
 Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_summary.md` (~1.5K tokens). Re-run only if the proposal PDF changes.
@@ -86,13 +97,16 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 
 | File | Purpose |
 |---|---|
-| `src/server.py` | MCP server entry point — exposes the three tools |
-| `src/search.py` | Two-stage BM25 search engine + abstract cache reader |
-| `src/build_abstracts_cache.py` | Rebuilds `data/abstracts_cache.json` from `.enl` + OpenAlex fallback |
-| `src/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |
-| `src/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/pis_cache.json` |
-| `src/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/proposal_summary.md` |
-| `data/abstracts_cache.json` | 952 abstracts keyed by DOI |
+| `src/server.py` | MCP server entry point — exposes all paper / PI tools |
+| `src/search.py` | Two-stage BM25 search engine + abstracts/metadata cache reader |
+| `src/semantic_search.py` | BGE-small cosine search; lazy-loads model and embeddings on first call |
+| `src/scripts/build_abstracts_cache.py` | Rebuilds `data/abstracts_cache.json`: abstracts (`.enl` → OpenAlex → S2) plus OpenAlex authors / journal / citation count |
+| `src/scripts/build_embeddings_cache.py` | Encodes title + abstract with BGE-small into `data/embeddings_cache.npz` |
+| `src/scripts/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |
+| `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/pis_cache.json` |
+| `src/scripts/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/proposal_summary.md` |
+| `data/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
+| `data/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
 | `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI |
 | `data/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
 | `data/data_publication_dois.csv` | 956 papers + 148 dataset links |

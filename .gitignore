@@ -5,3 +5,5 @@ fulltext_run.log
 .venv/
 CLAUDE.md
 data/
+reports
+.env

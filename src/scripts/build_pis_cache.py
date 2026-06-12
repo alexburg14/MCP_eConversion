@@ -24,7 +24,7 @@ import requests
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 OUTPUT = DATA_DIR / "pis_cache.json"
 LISTING_URL = "https://www.e-conversion.de/members/"
 PROFILE_URL_TMPL = "https://www.e-conversion.de/single-staff-page/?smid={smid}"
