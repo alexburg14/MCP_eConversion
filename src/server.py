@@ -3,7 +3,8 @@ import re
 import unicodedata
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
-from search import load_papers, build_index, search, _ABSTRACTS
+from search import load_papers, build_index, search, _ABSTRACTS, apply_cache
+import semantic_search
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = _DATA_DIR / "data_publication_dois.csv"
@@ -97,15 +98,14 @@ def _pi_summary(pi: dict) -> dict:
 
 @mcp.tool()
 def get_paper_by_doi(doi: str) -> str:
-    """Return metadata and abstract for a single paper by its DOI."""
-    paper = papers_by_doi.get(doi.strip().lower())
+    """Return metadata and abstract for a single paper by its DOI.
+    Includes full author list, journal, and citation count when present in the OpenAlex metadata cache."""
+    doi_key = doi.strip().lower()
+    paper = papers_by_doi.get(doi_key)
     if paper is None:
         return json.dumps({"error": f"No paper found for DOI: {doi}"})
     result = dict(paper)
-    cached = _ABSTRACTS.get(result["doi"].lower())
-    if cached:
-        result["abstract"] = cached["abstract"]
-        result["abstract_source"] = cached["source"]
+    apply_cache(result, doi_key)
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -129,9 +129,30 @@ def get_paper_fulltext(doi: str) -> str:
 
 @mcp.tool()
 def search_papers(query: str) -> str:
-    """Search e-conversion cluster publications by keyword.
-    Returns the top 5 matching papers with titles, authors, abstracts, and linked datasets."""
+    """Lexical (BM25) search over e-conversion cluster publications.
+    Best for exact terminology, acronyms, author names, or any query where the
+    user's words are likely to appear verbatim in the title or abstract.
+    Returns the top 5 matching papers with titles, authors, abstracts, and linked datasets.
+    For conceptual / synonym queries, prefer semantic_search_papers."""
     results = search(query, papers, index)
+    return json.dumps(results, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def semantic_search_papers(query: str) -> str:
+    """Semantic (embedding) search over e-conversion cluster publications.
+    Best for conceptual queries that may use different vocabulary than the
+    abstracts — e.g. 'splitting water with sunlight' finding photocatalytic OER
+    papers that never use those exact words. For exact terms (acronyms, formulas,
+    author names) prefer search_papers; lexical match is usually stronger there.
+    Returns the top 5 matching papers ranked by cosine similarity."""
+    if not query or not query.strip():
+        return json.dumps({"error": "Query must not be empty."})
+    if not semantic_search.is_available():
+        return json.dumps({
+            "error": "Embeddings cache not built. Run: python src/build_embeddings_cache.py",
+        })
+    results = semantic_search.semantic_search(query, papers_by_doi)
     return json.dumps(results, indent=2, ensure_ascii=False)
 
 
@@ -217,8 +238,9 @@ def get_pi(name: str) -> str:
     # Attach up to 10 papers from the abstract cache
     cached_papers = []
     for doi in dois:
-        paper = papers_by_doi.get(doi.lower())
-        abstract_entry = _ABSTRACTS.get(doi.lower())
+        doi_key = doi.lower()
+        paper = papers_by_doi.get(doi_key)
+        abstract_entry = _ABSTRACTS.get(doi_key)
         if paper or abstract_entry:
             entry = {}
             if paper:
@@ -228,8 +250,9 @@ def get_pi(name: str) -> str:
                     "year": paper.get("year"),
                     "authors": paper.get("authors"),
                 }
-            if abstract_entry:
-                entry["abstract"] = abstract_entry.get("abstract", "")[:500]
+            apply_cache(entry, doi_key)
+            if entry.get("abstract"):
+                entry["abstract"] = entry["abstract"][:500]
             cached_papers.append(entry)
         if len(cached_papers) >= 10:
             break

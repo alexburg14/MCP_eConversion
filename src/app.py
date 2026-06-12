@@ -25,7 +25,9 @@ _TOOLS = [
     {
         "name": "search_papers",
         "description": (
-            "Search e-conversion cluster publications by keyword. "
+            "Lexical (BM25) search over e-conversion cluster publications. "
+            "Best for exact terminology, acronyms, formulas, or author names — "
+            "any query where the user's words are likely to appear verbatim. "
             "Returns the top 5 matching papers with titles, authors, abstracts, "
             "and any linked datasets."
         ),
@@ -33,6 +35,24 @@ _TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Keyword search query"}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "semantic_search_papers",
+        "description": (
+            "Semantic (embedding) search over e-conversion cluster publications. "
+            "Best for conceptual queries where the user's vocabulary may differ "
+            "from the abstracts (synonyms, paraphrases, lay descriptions). "
+            "Example: 'splitting water with sunlight' finds photocatalytic OER "
+            "papers that never use those exact words. For exact terms, prefer search_papers. "
+            "Returns the top 5 matching papers ranked by cosine similarity."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Conceptual / semantic search query"}
             },
             "required": ["query"],
         },
@@ -103,6 +123,17 @@ some full texts) and profiles of 42 PIs. Use the tools to retrieve relevant info
 before answering. Always cite papers by title and DOI. If information is missing from \
 the database, say so clearly — do not invent facts.
 
+Two paper-search tools complement each other:
+- search_papers (BM25, lexical): exact terms, acronyms, formulas, author names.
+- semantic_search_papers (embeddings): conceptual queries where vocabulary may
+  differ from abstracts. Run both when you're unsure which will hit — the
+  union of results gives wider recall before you synthesize.
+
+For corpus-wide questions ("main open challenges", "trends over time", \
+"complementary groups"), issue several complementary queries before answering: \
+one tool call returns at most 5 papers, but a synthesis question needs evidence \
+from many. Iterate with different phrasings, then summarize.
+
 Answer in the same language as the question (German or English).\
 """
 
@@ -131,6 +162,7 @@ _SYSTEM = _build_system_prompt()
 def _dispatch(name: str, inputs: dict) -> str:
     dispatch = {
         "search_papers": lambda i: server.search_papers(i["query"]),
+        "semantic_search_papers": lambda i: server.semantic_search_papers(i["query"]),
         "get_paper_by_doi": lambda i: server.get_paper_by_doi(i["doi"]),
         "get_paper_fulltext": lambda i: server.get_paper_fulltext(i["doi"]),
         "search_pis": lambda i: server.search_pis(i["query"]),

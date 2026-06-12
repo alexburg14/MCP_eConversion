@@ -3,6 +3,11 @@ requests
 mcp
 trafilatura
 pymupdf4llm
+# semantic search
+sentence-transformers
+numpy
+# torch 2.12 fails to load on Windows 10 (c10.dll init error). Install the CPU build:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 # chat interface
 anthropic
 streamlit

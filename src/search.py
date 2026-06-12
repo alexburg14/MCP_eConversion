@@ -70,10 +70,30 @@ def search(query, papers, index, top_k=5):
     results = []
     for idx in top_indices:
         paper = dict(papers[idx])
-        cached = _ABSTRACTS.get(paper["doi"].lower())
-        if cached:
-            paper["abstract"] = cached["abstract"]
-            paper["abstract_source"] = cached["source"]
+        apply_cache(paper, paper["doi"].lower())
         paper["matched_on"] = search_field
         results.append(paper)
     return results
+
+
+def apply_cache(paper: dict, doi: str) -> None:
+    """Overlay the cached abstract and OpenAlex metadata onto a paper dict.
+
+    Adds abstract/abstract_source plus full authors (the CSV's `authors` field
+    is truncated for non-ASCII surnames; OpenAlex is clean), journal, and
+    citation_count. Falls back silently to the CSV fields when the DOI isn't
+    cached or OpenAlex didn't know it.
+    """
+    cached = _ABSTRACTS.get(doi)
+    if not cached:
+        return
+    if cached.get("abstract"):
+        paper["abstract"] = cached["abstract"]
+        paper["abstract_source"] = cached["source"]
+    if cached.get("authors"):
+        paper["authors"] = cached["authors"]
+        paper["authors_source"] = "openalex"
+    if cached.get("journal"):
+        paper["journal"] = cached["journal"]
+    if cached.get("citation_count") is not None:
+        paper["citation_count"] = cached["citation_count"]
