@@ -40,12 +40,15 @@ python src/server.py
 
 ## Chat interface
 
-A Streamlit web app that lets researchers ask questions in natural language. It calls the search tools internally and uses Claude to synthesize answers. Requires an Anthropic API key.
+A Streamlit web app that lets researchers ask questions in natural language. It calls the search tools internally and uses an LLM from the GWDG SAIA / Academic Cloud Chat AI endpoint (OpenAI-compatible, `https://chat-ai.academiccloud.de/v1`) to synthesize answers. The model is selectable in the sidebar (default `qwen3.5-122b-a10b`; all listed models verified for tool calling).
+
+Put the SAIA key in `.env` at the repo root (`API_KEY=...`) or export it, then:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
 streamlit run src/app.py
 ```
+
+SAIA keys expire after 6 months — renew at https://saia.gwdg.de/dashboard.
 
 ## Layout
 

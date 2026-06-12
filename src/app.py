@@ -4,112 +4,159 @@ eConversion Knowledge Assistant — Streamlit chat interface.
 Run with:
     streamlit run src/app.py
 
-Requires ANTHROPIC_API_KEY in the environment.
+Backed by the GWDG SAIA / Academic Cloud Chat AI endpoint (OpenAI-compatible).
+Requires API_KEY in the environment or in a .env file at the repo root.
 """
 import json
 import os
 import sys
 from pathlib import Path
 
-import anthropic
 import streamlit as st
+from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent))
 import server  # loads all caches at import time
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+BASE_URL = "https://chat-ai.academiccloud.de/v1"
+
+# Tool calling verified against the live endpoint on 2026-06-12; the meeting
+# goal "mit welchen Modellen gut? Schlecht?" wants side-by-side comparison,
+# so the model is a sidebar choice rather than a constant.
+MODELS = [
+    "qwen3.5-122b-a10b",
+    "glm-4.7",
+    "openai-gpt-oss-120b",
+    "mistral-large-3-675b-instruct-2512",
+]
+
+
+def _load_dotenv() -> None:
+    """Set vars from the repo-root .env if not already in the environment."""
+    env_file = _REPO_ROOT / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 # ---------------------------------------------------------------------------
-# Claude tool definitions
+# Tool definitions (OpenAI function-calling format)
 # ---------------------------------------------------------------------------
 
 _TOOLS = [
     {
-        "name": "search_papers",
-        "description": (
-            "Lexical (BM25) search over e-conversion cluster publications. "
-            "Best for exact terminology, acronyms, formulas, or author names — "
-            "any query where the user's words are likely to appear verbatim. "
-            "Returns the top 5 matching papers with titles, authors, abstracts, "
-            "and any linked datasets."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Keyword search query"}
+        "type": "function",
+        "function": {
+            "name": "search_papers",
+            "description": (
+                "Lexical (BM25) search over e-conversion cluster publications. "
+                "Best for exact terminology, acronyms, formulas, or author names — "
+                "any query where the user's words are likely to appear verbatim. "
+                "Returns the top 5 matching papers with titles, authors, abstracts, "
+                "and any linked datasets."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keyword search query"}
+                },
+                "required": ["query"],
             },
-            "required": ["query"],
         },
     },
     {
-        "name": "semantic_search_papers",
-        "description": (
-            "Semantic (embedding) search over e-conversion cluster publications. "
-            "Best for conceptual queries where the user's vocabulary may differ "
-            "from the abstracts (synonyms, paraphrases, lay descriptions). "
-            "Example: 'splitting water with sunlight' finds photocatalytic OER "
-            "papers that never use those exact words. For exact terms, prefer search_papers. "
-            "Returns the top 5 matching papers ranked by cosine similarity."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Conceptual / semantic search query"}
+        "type": "function",
+        "function": {
+            "name": "semantic_search_papers",
+            "description": (
+                "Semantic (embedding) search over e-conversion cluster publications. "
+                "Best for conceptual queries where the user's vocabulary may differ "
+                "from the abstracts (synonyms, paraphrases, lay descriptions). "
+                "Example: 'splitting water with sunlight' finds photocatalytic OER "
+                "papers that never use those exact words. For exact terms, prefer search_papers. "
+                "Returns the top 5 matching papers ranked by cosine similarity."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Conceptual / semantic search query"}
+                },
+                "required": ["query"],
             },
-            "required": ["query"],
         },
     },
     {
-        "name": "get_paper_by_doi",
-        "description": "Return full metadata and abstract for a single paper given its DOI.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "doi": {"type": "string", "description": "DOI of the paper, e.g. 10.1103/physrevb.110.125202"}
+        "type": "function",
+        "function": {
+            "name": "get_paper_by_doi",
+            "description": "Return full metadata and abstract for a single paper given its DOI.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doi": {"type": "string", "description": "DOI of the paper, e.g. 10.1103/physrevb.110.125202"}
+                },
+                "required": ["doi"],
             },
-            "required": ["doi"],
         },
     },
     {
-        "name": "get_paper_fulltext",
-        "description": (
-            "Return full-text markdown for a paper by DOI. "
-            "Only available for the ~42% of open-access papers in the cache. "
-            "Use when the abstract is insufficient and deeper content is needed."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "doi": {"type": "string", "description": "DOI of the paper"}
+        "type": "function",
+        "function": {
+            "name": "get_paper_fulltext",
+            "description": (
+                "Return full-text markdown for a paper by DOI. "
+                "Only available for the ~42% of open-access papers in the cache. "
+                "Use when the abstract is insufficient and deeper content is needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doi": {"type": "string", "description": "DOI of the paper"}
+                },
+                "required": ["doi"],
             },
-            "required": ["doi"],
         },
     },
     {
-        "name": "search_pis",
-        "description": (
-            "Search e-conversion principal investigators (PIs) by name, research area, "
-            "or application field keyword. Returns the top 5 matching PIs."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Keyword query (name, topic, field)"}
+        "type": "function",
+        "function": {
+            "name": "search_pis",
+            "description": (
+                "Search e-conversion principal investigators (PIs) by name, research area, "
+                "or application field keyword. Returns the top 5 matching PIs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keyword query (name, topic, field)"}
+                },
+                "required": ["query"],
             },
-            "required": ["query"],
         },
     },
     {
-        "name": "get_pi",
-        "description": (
-            "Return the full profile of a PI by name (last name or full name). "
-            "Includes group, institution, research focus, application fields, website, "
-            "and up to 10 of their publications from the abstract cache."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "PI last name or full name, e.g. 'Rinke' or 'Patrick Rinke'"}
+        "type": "function",
+        "function": {
+            "name": "get_pi",
+            "description": (
+                "Return the full profile of a PI by name (last name or full name). "
+                "Includes group, institution, research focus, application fields, website, "
+                "and up to 10 of their publications from the abstract cache."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "PI last name or full name, e.g. 'Rinke' or 'Patrick Rinke'"}
+                },
+                "required": ["name"],
             },
-            "required": ["name"],
         },
     },
 ]
@@ -137,7 +184,7 @@ from many. Iterate with different phrasings, then summarize.
 Answer in the same language as the question (German or English).\
 """
 
-_PROPOSAL_SUMMARY_PATH = Path(__file__).resolve().parent.parent / "data" / "proposal_summary.md"
+_PROPOSAL_SUMMARY_PATH = _REPO_ROOT / "data" / "proposal_summary.md"
 
 
 def _build_system_prompt() -> str:
@@ -158,6 +205,8 @@ def _build_system_prompt() -> str:
 
 _SYSTEM = _build_system_prompt()
 
+_MAX_TOOL_ROUNDS = 10
+
 
 def _dispatch(name: str, inputs: dict) -> str:
     dispatch = {
@@ -171,43 +220,52 @@ def _dispatch(name: str, inputs: dict) -> str:
     fn = dispatch.get(name)
     if fn is None:
         return json.dumps({"error": f"Unknown tool: {name}"})
-    return fn(inputs)
+    try:
+        return fn(inputs)
+    except KeyError as exc:
+        return json.dumps({"error": f"Missing argument for {name}: {exc}"})
 
 
-def _answer(client: anthropic.Anthropic, messages: list[dict]) -> tuple[str, list[str]]:
+def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list[str]]:
     """Run the tool-use loop; return (answer_text, list_of_tool_calls_summary)."""
     tool_log: list[str] = []
-    msgs = list(messages)
+    msgs = [{"role": "system", "content": _SYSTEM}] + list(messages)
 
-    while True:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
+    for _ in range(_MAX_TOOL_ROUNDS):
+        response = client.chat.completions.create(
+            model=model,
             max_tokens=2048,
-            system=_SYSTEM,
-            tools=_TOOLS,
             messages=msgs,
+            tools=_TOOLS,
         )
+        msg = response.choices[0].message
 
-        # Collect tool calls
-        tool_uses = [b for b in response.content if b.type == "tool_use"]
-        text_blocks = [b for b in response.content if b.type == "text"]
+        if not msg.tool_calls:
+            return msg.content or "", tool_log
 
-        if response.stop_reason == "end_turn" or not tool_uses:
-            text = " ".join(b.text for b in text_blocks)
-            return text, tool_log
-
-        # Execute tools
-        msgs.append({"role": "assistant", "content": response.content})
-        tool_results = []
-        for tu in tool_uses:
-            result = _dispatch(tu.name, tu.input)
-            tool_log.append(f"`{tu.name}({json.dumps(tu.input, ensure_ascii=False)[:80]})`")
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tu.id,
+        msgs.append({
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ],
+        })
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = _dispatch(tc.function.name, args)
+            tool_log.append(f"`{tc.function.name}({(tc.function.arguments or '')[:80]})`")
+            msgs.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
                 "content": result,
             })
-        msgs.append({"role": "user", "content": tool_results})
+
+    return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +276,16 @@ st.set_page_config(page_title="eConversion Assistant", page_icon="⚡", layout="
 st.title("⚡ eConversion Knowledge Assistant")
 st.caption("956 publications · 42 PIs · TUM / LMU / FHI / MPI FKF")
 
-# API key check
-api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+_load_dotenv()
+api_key = os.environ.get("API_KEY", "")
 if not api_key:
-    st.error("Set `ANTHROPIC_API_KEY` in your environment and restart the app.")
+    st.error("Set `API_KEY` in your environment or in `.env` at the repo root and restart the app.")
     st.stop()
 
-client = anthropic.Anthropic(api_key=api_key)
+model = st.sidebar.selectbox("Model", MODELS, index=0)
+st.sidebar.caption(f"Endpoint: {BASE_URL}")
+
+client = OpenAI(api_key=api_key, base_url=BASE_URL)
 
 # Chat history in session state
 if "messages" not in st.session_state:
@@ -247,7 +308,7 @@ if prompt := st.chat_input("Ask about papers, PIs, or research topics..."):
     with st.chat_message("assistant"):
         with st.spinner("Searching..."):
             try:
-                answer, tool_calls = _answer(client, api_msgs)
+                answer, tool_calls = _answer(client, model, api_msgs)
             except Exception as exc:
                 answer = f"Error: {exc}"
                 tool_calls = []
