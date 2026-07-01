@@ -159,6 +159,74 @@ _TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_collaborators",
+            "description": (
+                "Return all PIs who share at least one publication with the queried PI, "
+                "ordered by number of shared papers. Use for 'who does X work with?' questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pi_query": {"type": "string", "description": "PI last name or full name, e.g. 'Rinke'"}
+                },
+                "required": ["pi_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "joint_papers",
+            "description": (
+                "Return the DOIs of papers co-authored by two specific PIs. "
+                "Returns count=0 and empty list if they have never co-published."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pi_a": {"type": "string", "description": "First PI last name or full name"},
+                    "pi_b": {"type": "string", "description": "Second PI last name or full name"},
+                },
+                "required": ["pi_a", "pi_b"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "collaboration_centrality",
+            "description": (
+                "Return PIs ranked by betweenness centrality — those who bridge otherwise "
+                "separate research groups. Use for 'who are the connectors in the cluster?' questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "top_k": {"type": "integer", "description": "How many top PIs to return (default 10)"}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "collaboration_communities",
+            "description": (
+                "Return communities (clusters) of PIs who collaborate more internally than externally, "
+                "detected via greedy modularity on the co-authorship graph. "
+                "Use for 'which groups work closely together?' questions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
 
 _BASE_SYSTEM = """\
@@ -175,6 +243,12 @@ Two paper-search tools complement each other:
 - semantic_search_papers (embeddings): conceptual queries where vocabulary may
   differ from abstracts. Run both when you're unsure which will hit — the
   union of results gives wider recall before you synthesize.
+
+Four collaboration-graph tools answer network questions that search cannot:
+- get_collaborators(pi_query): who publishes with a given PI?
+- joint_papers(pi_a, pi_b): which papers did two specific PIs co-author?
+- collaboration_centrality(): which PIs bridge otherwise-separate groups?
+- collaboration_communities(): which clusters of PIs work closely together?
 
 For corpus-wide questions ("main open challenges", "trends over time", \
 "complementary groups"), issue several complementary queries before answering: \
@@ -216,6 +290,10 @@ def _dispatch(name: str, inputs: dict) -> str:
         "get_paper_fulltext": lambda i: server.get_paper_fulltext(i["doi"]),
         "search_pis": lambda i: server.search_pis(i["query"]),
         "get_pi": lambda i: server.get_pi(i["name"]),
+        "get_collaborators": lambda i: server.get_collaborators(i["pi_query"]),
+        "joint_papers": lambda i: server.joint_papers(i["pi_a"], i["pi_b"]),
+        "collaboration_centrality": lambda i: server.collaboration_centrality(i.get("top_k", 10)),
+        "collaboration_communities": lambda i: server.collaboration_communities(),
     }
     fn = dispatch.get(name)
     if fn is None:

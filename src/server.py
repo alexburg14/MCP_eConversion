@@ -5,6 +5,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from search import load_papers, build_index, search, _ABSTRACTS, apply_cache
 import semantic_search
+import graph as _graph
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = _DATA_DIR / "data_publication_dois.csv"
@@ -260,6 +261,45 @@ def get_pi(name: str) -> str:
     result["publications_in_cache"] = len(cached_papers)
     result["publications"] = cached_papers
     return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_collaborators(pi_query: str) -> str:
+    """Return all PIs who share at least one publication with the queried PI, most-shared first.
+    Accepts last name, full name, or smid. Use this for 'who does X work with?' questions."""
+    if not _graph.is_available():
+        return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
+    return json.dumps(_graph.get_collaborators(pi_query), indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def joint_papers(pi_a: str, pi_b: str) -> str:
+    """Return the DOIs of papers co-authored by two named PIs.
+    Returns an empty list if the two PIs have never co-published.
+    Accepts last name or full name for each PI."""
+    if not _graph.is_available():
+        return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
+    return json.dumps(_graph.joint_papers(pi_a, pi_b), indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def collaboration_centrality(top_k: int = 10) -> str:
+    """Return PIs ranked by betweenness centrality in the co-authorship graph.
+    High centrality = a PI bridges otherwise-separate research groups.
+    Use for 'who are the connectors / bridges in the cluster?' questions."""
+    if not _graph.is_available():
+        return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
+    return json.dumps(_graph.collaboration_centrality(top_k), indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def collaboration_communities() -> str:
+    """Return communities (clusters) of PIs who collaborate internally more than externally.
+    Uses greedy modularity detection on the co-authorship graph.
+    Use for 'which groups work together?' or cluster-structure questions."""
+    if not _graph.is_available():
+        return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
+    return json.dumps(_graph.collaboration_communities(), indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":
