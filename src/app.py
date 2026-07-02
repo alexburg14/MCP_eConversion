@@ -95,6 +95,30 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "list_papers",
+            "description": (
+                "List ALL cluster publications matching exact metadata filters "
+                "(author, year, journal), newest first — not just the top 5. "
+                "Use for exhaustive listings: 'every paper by Rinke', 'papers in Nature', "
+                "'what the cluster published in 2022'. Filters combine with AND; at least "
+                "one is required. Author/journal are accent-insensitive substring matches, "
+                "year is exact."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "author": {"type": "string", "description": "Author surname or name substring, e.g. 'Rinke'"},
+                    "year": {"type": "string", "description": "Exact publication year, e.g. '2022'"},
+                    "journal": {"type": "string", "description": "Journal name substring, e.g. 'Nature'"},
+                    "limit": {"type": "integer", "description": "Max papers to return (default 50)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_paper_by_doi",
             "description": "Return full metadata and abstract for a single paper given its DOI.",
             "parameters": {
@@ -244,6 +268,10 @@ Two paper-search tools complement each other:
   differ from abstracts. Run both when you're unsure which will hit — the
   union of results gives wider recall before you synthesize.
 
+Use list_papers (exact metadata filter: author, year, journal) for exhaustive \
+listings — "every paper by X", "papers in Nature", "what the cluster published in \
+2022" — where the top-5 relevance results of the search tools are not enough.
+
 Four collaboration-graph tools answer network questions that search cannot:
 - get_collaborators(pi_query): who publishes with a given PI?
 - joint_papers(pi_a, pi_b): which papers did two specific PIs co-author?
@@ -288,6 +316,9 @@ def _dispatch(name: str, inputs: dict) -> str:
         "semantic_search_papers": lambda i: server.semantic_search_papers(i["query"]),
         "get_paper_by_doi": lambda i: server.get_paper_by_doi(i["doi"]),
         "get_paper_fulltext": lambda i: server.get_paper_fulltext(i["doi"]),
+        "list_papers": lambda i: server.list_papers(
+            i.get("author", ""), i.get("year", ""), i.get("journal", ""), i.get("limit", 50)
+        ),
         "search_pis": lambda i: server.search_pis(i["query"]),
         "get_pi": lambda i: server.get_pi(i["name"]),
         "get_collaborators": lambda i: server.get_collaborators(i["pi_query"]),

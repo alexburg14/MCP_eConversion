@@ -158,6 +158,59 @@ def semantic_search_papers(query: str) -> str:
 
 
 @mcp.tool()
+def list_papers(author: str = "", year: str = "", journal: str = "", limit: int = 50) -> str:
+    """List cluster publications matching exact metadata filters, newest first.
+    Unlike search_papers / semantic_search_papers (which rank by relevance and return only
+    the top 5), this returns EVERY paper matching the filters — use it for exhaustive
+    listings: 'all papers by Rinke', 'papers in Nature', 'what did the cluster publish in 2022'.
+    Filters are optional and combine with AND; author and journal are accent-insensitive
+    substring matches, year is exact. At least one filter is required.
+    Returns up to `limit` papers (default 50) plus the total match count."""
+    author_q = _fold(str(author).strip())
+    journal_q = _fold(str(journal).strip())
+    year_q = str(year).strip()
+    if not (author_q or journal_q or year_q):
+        return json.dumps({"error": "Provide at least one filter: author, year, or journal."})
+
+    matches = []
+    for paper in papers:
+        doi_key = paper["doi"].lower()
+        p = dict(paper)
+        apply_cache(p, doi_key)
+
+        if year_q and str(p.get("year") or "").strip() != year_q:
+            continue
+        if journal_q and journal_q not in _fold(p.get("journal") or ""):
+            continue
+        if author_q:
+            authors = p.get("authors") or ""
+            authors_text = " ".join(authors) if isinstance(authors, list) else authors
+            if author_q not in _fold(authors_text):
+                continue
+
+        matches.append({
+            "doi": p["doi"],
+            "title": p.get("title"),
+            "year": p.get("year"),
+            "authors": p.get("authors"),
+            "journal": p.get("journal"),
+            "citation_count": p.get("citation_count"),
+        })
+
+    matches.sort(
+        key=lambda m: int(m["year"]) if str(m.get("year") or "").isdigit() else -1,
+        reverse=True,
+    )
+
+    return json.dumps({
+        "filters": {"author": author, "year": year, "journal": journal},
+        "total_matches": len(matches),
+        "returned": min(len(matches), limit),
+        "papers": matches[:limit],
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
 def search_pis(query: str) -> str:
     """Search e-conversion PIs (principal investigators) by name, research area, or keyword.
     Returns the top 5 matching PIs with their group, institution, research focus, and publication count.
