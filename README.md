@@ -23,6 +23,11 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 | `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Only available for the ~42% of papers covered by the full-text cache. |
 | `search_pis(query)` | Keyword search across PI names, groups, research focus, and application fields. Returns the top 5 matching PIs with group, institution, research focus, and publication count. |
 | `get_pi(name)` | Profile lookup for a PI by last name, full name, or keyword. Returns full details plus up to 10 linked papers from the abstract cache. |
+| `list_papers(author, year, journal, limit)` | Exhaustive metadata filtering (not top-5 ranking) — every paper matching the given filters, newest first. At least one of `author` / `year` / `journal` is required; filters combine with AND. |
+| `get_collaborators(pi_query)` | All PIs who share at least one publication with the queried PI, most-shared first. |
+| `joint_papers(pi_a, pi_b)` | DOIs of papers co-authored by two named PIs. |
+| `collaboration_centrality(top_k)` | PIs ranked by betweenness centrality in the co-authorship graph — the connectors between otherwise-separate groups. |
+| `collaboration_communities()` | Clusters of PIs who collaborate internally more than externally (greedy modularity detection). |
 
 ## Setup
 
@@ -88,6 +93,14 @@ python src/scripts/build_embeddings_cache.py
 
 Encodes `title + abstract` for every paper in the abstract cache with `BAAI/bge-small-en-v1.5` (384-d, L2-normalised) and writes `data/embeddings_cache.npz`. Re-run only when the abstract cache changes. First run downloads the model (~130 MB).
 
+**Collaboration graph** — PI co-authorship graph for the `get_collaborators` / `joint_papers` / `collaboration_centrality` / `collaboration_communities` tools:
+
+```bash
+python src/scripts/build_graph_cache.py
+```
+
+Two PIs are linked iff they share a publication DOI (factual set intersection over `pis_cache.json`, no name disambiguation needed). Writes `data/collaboration_graph.json`. Re-run only when `pis_cache.json` changes.
+
 **Proposal summary** — one-shot extraction of Section 2 of the e-conversion 2.0 DFG proposal, used as system-prompt context in the chat interface:
 
 ```bash
@@ -107,11 +120,14 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 | `src/scripts/build_embeddings_cache.py` | Encodes title + abstract with BGE-small into `data/embeddings_cache.npz` |
 | `src/scripts/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |
 | `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/pis_cache.json` |
+| `src/scripts/build_graph_cache.py` | Builds the PI co-authorship graph into `data/collaboration_graph.json` |
 | `src/scripts/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/proposal_summary.md` |
+| `src/graph.py` | Loads `collaboration_graph.json` into networkx; backs the collaboration-graph tools |
 | `data/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
 | `data/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
 | `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI |
 | `data/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
+| `data/collaboration_graph.json` | Node-link JSON of the PI co-authorship graph |
 | `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
 | `data/e-conversion-Converted.enl` | Source EndNote library (SQLite format) |
 | `data/scraper_cache.json` | Raw scraper output from e-conversion.de |
