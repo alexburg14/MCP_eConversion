@@ -95,6 +95,26 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_similar_papers",
+            "description": (
+                "Return papers most similar to a given paper, by embedding distance. "
+                "Use for 'what else is like the paper I'm reading?' — takes a DOI "
+                "(not a text query) and compares its embedding to every other paper's. "
+                "Requires the paper to be in the embeddings cache."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doi": {"type": "string", "description": "DOI of the paper to find similar papers for"},
+                    "top_k": {"type": "integer", "description": "How many similar papers to return (default 5)"},
+                },
+                "required": ["doi"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_papers",
             "description": (
                 "List ALL cluster publications matching exact metadata filters "
@@ -268,6 +288,9 @@ Two paper-search tools complement each other:
   differ from abstracts. Run both when you're unsure which will hit — the
   union of results gives wider recall before you synthesize.
 
+Use get_similar_papers(doi) for "what else is like this paper?" — it compares a
+specific paper's own embedding to every other paper's, rather than taking a text query.
+
 Use list_papers (exact metadata filter: author, year, journal) for exhaustive \
 listings — "every paper by X", "papers in Nature", "what the cluster published in \
 2022" — where the top-5 relevance results of the search tools are not enough.
@@ -314,6 +337,7 @@ def _dispatch(name: str, inputs: dict) -> str:
     dispatch = {
         "search_papers": lambda i: server.search_papers(i["query"]),
         "semantic_search_papers": lambda i: server.semantic_search_papers(i["query"]),
+        "get_similar_papers": lambda i: server.get_similar_papers(i["doi"], i.get("top_k", 5)),
         "get_paper_by_doi": lambda i: server.get_paper_by_doi(i["doi"]),
         "get_paper_fulltext": lambda i: server.get_paper_fulltext(i["doi"]),
         "list_papers": lambda i: server.list_papers(

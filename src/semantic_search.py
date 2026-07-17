@@ -17,12 +17,13 @@ _CACHE_PATH = _DATA_DIR / "embeddings_cache.npz"
 
 _dois: np.ndarray | None = None
 _vectors: np.ndarray | None = None
+_doi_index: dict | None = None
 _model = None
 
 
 def _load():
     """Idempotent lazy load. Returns (dois, vectors, model) or raises if cache missing."""
-    global _dois, _vectors, _model
+    global _dois, _vectors, _doi_index, _model
     if _vectors is not None and _model is not None:
         return _dois, _vectors, _model
     if not _CACHE_PATH.exists():
@@ -32,6 +33,7 @@ def _load():
     npz = np.load(_CACHE_PATH, allow_pickle=True)
     _dois = npz["dois"]
     _vectors = npz["vectors"]
+    _doi_index = {str(d).lower(): i for i, d in enumerate(_dois)}
     model_name = str(npz["model"]) if "model" in npz.files else "BAAI/bge-small-en-v1.5"
     from sentence_transformers import SentenceTransformer
     _model = SentenceTransformer(model_name)
@@ -56,5 +58,33 @@ def semantic_search(query: str, papers_by_doi: dict, top_k: int = 5) -> list[dic
         apply_cache(paper, doi)
         paper["semantic_score"] = float(scores[i])
         paper["matched_on"] = "semantic"
+        results.append(paper)
+    return results
+
+
+def similar_papers(doi: str, papers_by_doi: dict, top_k: int = 5) -> list[dict] | None:
+    """Papers whose embedding is closest to the given paper's own embedding.
+
+    Doc-to-doc similarity (vs. semantic_search's query-to-doc) — answers
+    "what else is like the paper I'm reading?" using the same cached vectors.
+    Returns None if the DOI isn't in the embeddings cache.
+    """
+    dois, vectors, _ = _load()
+    doi_key = doi.strip().lower()
+    idx = _doi_index.get(doi_key)
+    if idx is None:
+        return None
+
+    scores = vectors @ vectors[idx]
+    scores[idx] = -1.0  # exclude the paper itself
+    top_idx = np.argpartition(-scores, top_k)[:top_k]
+    top_idx = top_idx[np.argsort(-scores[top_idx])]
+
+    results = []
+    for i in top_idx:
+        d = str(dois[i]).lower()
+        paper = dict(papers_by_doi.get(d, {"doi": d}))
+        apply_cache(paper, d)
+        paper["similarity_score"] = float(scores[i])
         results.append(paper)
     return results
