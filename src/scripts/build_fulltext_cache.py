@@ -36,6 +36,16 @@ MIN_CHARS = 3000  # full articles are typically 10k+ chars; this filters landing
 FORCE = "--force" in sys.argv
 API_SLEEP = 0.3  # politeness between API calls
 
+# --delay N: seconds to sleep before each content download (PDF/HTML fetch).
+# For slow, license-polite publisher crawls (e.g. --delay 30). Metadata APIs
+# (Unpaywall/OpenAlex/S2/NCBI) keep API_SLEEP; they have their own rate limits.
+DOWNLOAD_SLEEP = 0.0
+if "--delay" in sys.argv:
+    try:
+        DOWNLOAD_SLEEP = float(sys.argv[sys.argv.index("--delay") + 1])
+    except (IndexError, ValueError):
+        raise SystemExit("Usage: --delay <seconds>")
+
 # Many publishers (ACS, Wiley, PMC) reject requests without a browser-like UA.
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -352,6 +362,8 @@ def collect_urls(doi):
 def extract_pdf(url):
     """Download PDF and extract markdown text via pymupdf4llm."""
     try:
+        if DOWNLOAD_SLEEP:
+            time.sleep(DOWNLOAD_SLEEP)
         r = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT}, allow_redirects=True)
         if r.status_code != 200:
             return None
@@ -375,6 +387,8 @@ def extract_pdf(url):
 def extract_html(url):
     """Fetch and extract main article text from an HTML URL via trafilatura."""
     try:
+        if DOWNLOAD_SLEEP:
+            time.sleep(DOWNLOAD_SLEEP)
         r = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT}, allow_redirects=True)
         if r.status_code != 200:
             return None
@@ -460,7 +474,8 @@ def main():
 
     print(f"Total DOIs:     {len(dois)}")
     print(f"Already cached: {len(cache)}")
-    print(f"To fetch:       {len(to_fetch)}\n")
+    print(f"To fetch:       {len(to_fetch)}")
+    print(f"Download delay: {DOWNLOAD_SLEEP}s\n", flush=True)
 
     today = str(date.today())
     counts = {"pdf": 0, "html": 0, "pmc": 0, "not_found": 0}
@@ -481,7 +496,7 @@ def main():
             counts["not_found"] += 1
             label = "[NOT FOUND]"
 
-        print(f"  [{i:3d}/{len(to_fetch)}] {doi[:48]:<48}  {label}")
+        print(f"  [{i:3d}/{len(to_fetch)}] {doi[:48]:<48}  {label}", flush=True)
 
         if i % 50 == 0:
             with open(OUTPUT, "w", encoding="utf-8") as f:
