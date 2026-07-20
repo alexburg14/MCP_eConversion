@@ -12,11 +12,14 @@ import os
 import sys
 from pathlib import Path
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent))
 import server  # loads all caches at import time
+import corpus_map
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -401,6 +404,11 @@ def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list
     return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log
 
 
+@st.cache_data(show_spinner="Computing corpus map (UMAP + clustering)...")
+def _build_corpus_map(n_clusters: int) -> list[dict]:
+    return corpus_map.build_map(server.papers_by_doi, n_clusters=n_clusters)
+
+
 # ---------------------------------------------------------------------------
 # Streamlit UI
 # ---------------------------------------------------------------------------
@@ -409,47 +417,95 @@ st.set_page_config(page_title="eConversion Assistant", page_icon="⚡", layout="
 st.title("⚡ eConversion Knowledge Assistant")
 st.caption("956 publications · 42 PIs · TUM / LMU / FHI / MPI FKF")
 
-_load_dotenv()
-api_key = os.environ.get("API_KEY", "")
-if not api_key:
-    st.error("Set `API_KEY` in your environment or in `.env` at the repo root and restart the app.")
-    st.stop()
+tab_chat, tab_map = st.tabs(["💬 Chat", "🗺️ Corpus Map"])
 
-model = st.sidebar.selectbox("Model", MODELS, index=0)
-st.sidebar.caption(f"Endpoint: {BASE_URL}")
+# Corpus map only needs the embeddings cache, not the API key — render it
+# before the chat tab's st.stop() so a missing key doesn't hide it too.
+with tab_map:
+    st.caption(
+        "UMAP layout of the paper embeddings; KMeans clusters (computed in the "
+        "full 384-d space) labeled with their top title keywords. Hover a point "
+        "for title/year — a visual answer to 'which papers are near the one I'm reading?'"
+    )
+    if not corpus_map.is_available():
+        st.info("Embeddings cache not built. Run: `python src/scripts/build_embeddings_cache.py`")
+    else:
+        n_clusters = st.slider("Clusters", min_value=2, max_value=20, value=8)
+        df = pd.DataFrame(_build_corpus_map(n_clusters))
 
-client = OpenAI(api_key=api_key, base_url=BASE_URL)
+        highlight = st.selectbox(
+            "Highlight a paper (the one you're reading)",
+            options=[""] + sorted(df["title"].tolist()),
+            format_func=lambda t: t if t else "— none —",
+        )
 
-# Chat history in session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+        base = (
+            alt.Chart(df)
+            .mark_circle(size=45, opacity=0.65)
+            .encode(
+                x=alt.X("x:Q", axis=None),
+                y=alt.Y("y:Q", axis=None),
+                color=alt.Color(
+                    "cluster:N",
+                    legend=alt.Legend(title="Cluster (top title keywords)", labelLimit=280),
+                ),
+                tooltip=["title:N", "year:N", "doi:N", "cluster:N"],
+            )
+        )
+        if highlight:
+            # Ring around the selected paper so its neighborhood is readable at a glance.
+            marker = (
+                alt.Chart(df[df["title"] == highlight])
+                .mark_point(shape="circle", size=400, strokeWidth=3, filled=False, color="red")
+                .encode(x="x:Q", y="y:Q", tooltip=["title:N", "year:N", "doi:N"])
+            )
+            chart = (base + marker).properties(height=600).interactive()
+        else:
+            chart = base.properties(height=600).interactive()
+        st.altair_chart(chart, width="stretch")
 
-# Render history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+with tab_chat:
+    _load_dotenv()
+    api_key = os.environ.get("API_KEY", "")
+    if not api_key:
+        st.error("Set `API_KEY` in your environment or in `.env` at the repo root and restart the app.")
+        st.stop()
 
-# Input
-if prompt := st.chat_input("Ask about papers, PIs, or research topics..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    model = st.sidebar.selectbox("Model", MODELS, index=0)
+    st.sidebar.caption(f"Endpoint: {BASE_URL}")
 
-    # Build messages for API (text-only history)
-    api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    client = OpenAI(api_key=api_key, base_url=BASE_URL)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Searching..."):
-            try:
-                answer, tool_calls = _answer(client, model, api_msgs)
-            except Exception as exc:
-                answer = f"Error: {exc}"
-                tool_calls = []
+    # Chat history in session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-        st.markdown(answer)
-        if tool_calls:
-            with st.expander("Tools used", expanded=False):
-                for tc in tool_calls:
-                    st.code(tc, language=None)
+    # Render history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    # Input
+    if prompt := st.chat_input("Ask about papers, PIs, or research topics..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Build messages for API (text-only history)
+        api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+
+        with st.chat_message("assistant"):
+            with st.spinner("Searching..."):
+                try:
+                    answer, tool_calls = _answer(client, model, api_msgs)
+                except Exception as exc:
+                    answer = f"Error: {exc}"
+                    tool_calls = []
+
+            st.markdown(answer)
+            if tool_calls:
+                with st.expander("Tools used", expanded=False):
+                    for tc in tool_calls:
+                        st.code(tc, language=None)
+
+        st.session_state.messages.append({"role": "assistant", "content": answer})
