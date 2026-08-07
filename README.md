@@ -21,6 +21,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 | `semantic_search_papers(query)` | Semantic (embedding) search — top 5 papers ranked by cosine similarity over BGE-small embeddings. Best for conceptual queries where wording may differ from the abstracts. |
 | `get_paper_by_doi(doi)` | Direct lookup — returns full metadata and abstract for a single paper. When OpenAlex metadata is cached, includes the full author list, journal, and citation count. |
 | `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Only available for the ~42% of papers covered by the full-text cache. |
+| `search_nomad(elements, formula, author, text)` | Live search over the **public NOMAD** materials repository — external computed/experimental data, not cluster papers. Filters combine with AND. Text queries are relevance-ranked (`_score`), structured filters newest-first. Returns `total_matches` plus a sample. |
 | `search_pis(query)` | Keyword search across PI names, groups, research focus, and application fields. Returns the top 5 matching PIs with group, institution, research focus, and publication count. |
 | `get_pi(name)` | Profile lookup for a PI by last name, full name, or keyword. Returns full details plus up to 10 linked papers from the abstract cache. |
 | `list_papers(author, year, journal, limit)` | Exhaustive metadata filtering (not top-5 ranking) — every paper matching the given filters, newest first. At least one of `author` / `year` / `journal` is required; filters combine with AND. |
@@ -116,6 +117,7 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 | `src/server.py` | MCP server entry point — exposes all paper / PI tools |
 | `src/search.py` | Two-stage BM25 search engine + abstracts/metadata cache reader |
 | `src/semantic_search.py` | BGE-small cosine search; lazy-loads model and embeddings on first call |
+| `src/nomad_search.py` | Live query against the public NOMAD API (no cache, no credentials) |
 | `src/scripts/build_abstracts_cache.py` | Rebuilds `data/abstracts_cache.json`: abstracts (`.enl` → OpenAlex → S2) plus OpenAlex authors / journal / citation count |
 | `src/scripts/build_embeddings_cache.py` | Encodes title + abstract with BGE-small into `data/embeddings_cache.npz` |
 | `src/scripts/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |

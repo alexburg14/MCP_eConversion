@@ -274,6 +274,31 @@ _TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_nomad",
+            "description": (
+                "Search the public NOMAD materials-science repository (EXTERNAL data — "
+                "computed/experimental entries, NOT e-conversion publications). Use for "
+                "'is there NOMAD data on material X?' or 'what has PI Y deposited?'. "
+                "Filters combine with AND; at least one is required. Lead with total_matches: "
+                "broad filters match tens of thousands of entries, so the returned list is a "
+                "sample, not 'the results'. NOMAD entries cannot be linked back to a paper's DOI."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "elements": {"type": "string", "description": "Comma-separated elements; matches entries containing ALL, e.g. 'Ti,O'"},
+                    "formula": {"type": "string", "description": "NOMAD reduced formula, alphabetical, e.g. 'O3SrTi' for SrTiO3"},
+                    "author": {"type": "string", "description": "Depositor name, e.g. 'Karsten Reuter'"},
+                    "text": {"type": "string", "description": "Free-text search; results are relevance-ranked"},
+                    "limit": {"type": "integer", "description": "Max entries to return (default 5)"},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 _BASE_SYSTEM = """\
@@ -303,6 +328,12 @@ Four collaboration-graph tools answer network questions that search cannot:
 - joint_papers(pi_a, pi_b): which papers did two specific PIs co-author?
 - collaboration_centrality(): which PIs bridge otherwise-separate groups?
 - collaboration_communities(): which clusters of PIs work closely together?
+
+search_nomad queries the public NOMAD materials repository — data EXTERNAL to the \
+cluster, not e-conversion papers. Use it when asked whether computed or measured data \
+exists for a material, or what a PI has deposited. Report total_matches first; the \
+entries it returns are a sample of a much larger set. NOMAD entries carry no DOI link \
+back to cluster publications, so never present them as "the data behind" a paper.
 
 For corpus-wide questions ("main open challenges", "trends over time", \
 "complementary groups"), issue several complementary queries before answering: \
@@ -352,6 +383,10 @@ def _dispatch(name: str, inputs: dict) -> str:
         "joint_papers": lambda i: server.joint_papers(i["pi_a"], i["pi_b"]),
         "collaboration_centrality": lambda i: server.collaboration_centrality(i.get("top_k", 10)),
         "collaboration_communities": lambda i: server.collaboration_communities(),
+        "search_nomad": lambda i: server.search_nomad(
+            i.get("elements", ""), i.get("formula", ""), i.get("author", ""),
+            i.get("text", ""), i.get("limit", 5),
+        ),
     }
     fn = dispatch.get(name)
     if fn is None:

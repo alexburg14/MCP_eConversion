@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from search import load_papers, build_index, search, _ABSTRACTS, apply_cache
 import semantic_search
 import graph as _graph
+import nomad_search as _nomad
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = _DATA_DIR / "data_publication_dois.csv"
@@ -332,6 +333,25 @@ def get_pi(name: str) -> str:
     result["publications_in_cache"] = len(cached_papers)
     result["publications"] = cached_papers
     return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def search_nomad(elements: str = "", formula: str = "", author: str = "", text: str = "", limit: int = 5) -> str:
+    """Search the public NOMAD materials-science repository for computed/experimental entries.
+    This is EXTERNAL data — not e-conversion publications. Use it for "is there NOMAD data on
+    material X?" or "what has PI Y deposited?", not for finding cluster papers.
+    Filters combine with AND; at least one is required:
+      elements — comma-separated, matches entries containing ALL of them ("Ti,O")
+      formula  — NOMAD's reduced form, alphabetical ("O3SrTi" for SrTiO3)
+      author   — depositor name, the only reliable link to an e-conversion PI
+      text     — free-text search, relevance-ranked
+    Lead with total_matches: broad filters match tens of thousands of entries, so the
+    returned list is a sample (relevance-ranked for text, newest-first otherwise), not
+    "the results". NOMAD entries cannot be linked back to a paper's DOI."""
+    return json.dumps(
+        _nomad.search_nomad(elements, formula, author, text, limit),
+        indent=2, ensure_ascii=False,
+    )
 
 
 @mcp.tool()
