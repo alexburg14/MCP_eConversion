@@ -158,6 +158,24 @@ def semantic_search_papers(query: str) -> str:
 
 
 @mcp.tool()
+def get_similar_papers(doi: str, top_k: int = 5) -> str:
+    """Return papers most similar to a given paper, by embedding distance.
+    Use for 'what else is like the paper I'm reading?' — unlike semantic_search_papers
+    (which takes a text query), this takes a DOI and compares its own embedding to
+    every other paper's. Requires the paper to be in the embeddings cache."""
+    if not doi or not doi.strip():
+        return json.dumps({"error": "DOI must not be empty."})
+    if not semantic_search.is_available():
+        return json.dumps({
+            "error": "Embeddings cache not built. Run: python src/build_embeddings_cache.py",
+        })
+    results = semantic_search.similar_papers(doi, papers_by_doi, top_k)
+    if results is None:
+        return json.dumps({"error": f"No embedding cached for DOI: {doi}"})
+    return json.dumps(results, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
 def list_papers(author: str = "", year: str = "", journal: str = "", limit: int = 50) -> str:
     """List cluster publications matching exact metadata filters, newest first.
     Unlike search_papers / semantic_search_papers (which rank by relevance and return only

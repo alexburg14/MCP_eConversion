@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "streamlit-chat",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "src/app.py", "--server.headless", "true"],
+      "port": 8501
+    }
+  ]
+}

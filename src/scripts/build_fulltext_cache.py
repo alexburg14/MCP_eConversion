@@ -36,6 +36,31 @@ MIN_CHARS = 3000  # full articles are typically 10k+ chars; this filters landing
 FORCE = "--force" in sys.argv
 API_SLEEP = 0.3  # politeness between API calls
 
+# --delay N: seconds to sleep before each content download (PDF/HTML fetch).
+# For slow, license-polite publisher crawls (e.g. --delay 30). Metadata APIs
+# (Unpaywall/OpenAlex/S2/NCBI) keep API_SLEEP; they have their own rate limits.
+DOWNLOAD_SLEEP = 0.0
+if "--delay" in sys.argv:
+    try:
+        DOWNLOAD_SLEEP = float(sys.argv[sys.argv.index("--delay") + 1])
+    except (IndexError, ValueError):
+        raise SystemExit("Usage: --delay <seconds>")
+
+# --proxy URL: route ALL requests through an HTTP(S) forward proxy, e.g. a VPN'd
+# host or SSH tunnel (http://localhost:3128). Without the flag, the standard
+# HTTP_PROXY / HTTPS_PROXY environment variables are still honored (requests
+# default). Note this is a forward proxy, not eAccess/Shibboleth (browser-only).
+PROXY = None
+if "--proxy" in sys.argv:
+    try:
+        PROXY = sys.argv[sys.argv.index("--proxy") + 1]
+    except IndexError:
+        raise SystemExit("Usage: --proxy <url>")
+
+SESSION = requests.Session()
+if PROXY:
+    SESSION.proxies = {"http": PROXY, "https": PROXY}
+
 # Many publishers (ACS, Wiley, PMC) reject requests without a browser-like UA.
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -72,7 +97,7 @@ def _origin(url: str) -> str:
 def fetch_unpaywall(doi):
     """Return (pdf_urls, html_urls) from Unpaywall, or ([], [])."""
     try:
-        r = requests.get(
+        r = SESSION.get(
             f"https://api.unpaywall.org/v2/{doi}",
             params={"email": EMAIL},
             timeout=15,
@@ -99,7 +124,7 @@ def fetch_unpaywall(doi):
 def fetch_openalex(doi):
     """Return (pdf_urls, arxiv_id_or_None, pmcid_or_None) from OpenAlex."""
     try:
-        r = requests.get(
+        r = SESSION.get(
             f"https://api.openalex.org/works/https://doi.org/{doi}",
             headers={"User-Agent": f"mailto:{EMAIL}"},
             timeout=15,
@@ -141,7 +166,7 @@ def fetch_openalex(doi):
 def fetch_semantic_scholar(doi):
     """Return (pdf_url_or_None, arxiv_id_or_None) from Semantic Scholar."""
     try:
-        r = requests.get(
+        r = SESSION.get(
             f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
             params={"fields": "openAccessPdf,externalIds"},
             timeout=15,
@@ -165,7 +190,7 @@ def fetch_arxiv_id_by_doi(doi):
     surface as `ids.arxiv` / `externalIds.ArXiv`.
     """
     try:
-        r = requests.get(
+        r = SESSION.get(
             "http://export.arxiv.org/api/query",
             params={"search_query": f"doi:{doi}", "max_results": 1},
             timeout=15,
@@ -245,7 +270,7 @@ def fetch_pmc(doi, pmcid=None):
     """
     if not pmcid:
         try:
-            r = requests.get(
+            r = SESSION.get(
                 "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
                 params={
                     "ids": doi,
@@ -266,7 +291,7 @@ def fetch_pmc(doi, pmcid=None):
 
     pmc_num = pmcid.replace("PMC", "").strip()
     try:
-        r = requests.get(
+        r = SESSION.get(
             "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
             params={
                 "db": "pmc",
@@ -352,7 +377,9 @@ def collect_urls(doi):
 def extract_pdf(url):
     """Download PDF and extract markdown text via pymupdf4llm."""
     try:
-        r = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT}, allow_redirects=True)
+        if DOWNLOAD_SLEEP:
+            time.sleep(DOWNLOAD_SLEEP)
+        r = SESSION.get(url, timeout=30, headers={"User-Agent": USER_AGENT}, allow_redirects=True)
         if r.status_code != 200:
             return None
         # Some hosts (PMC interstitial, Wiley 403 page) return HTML instead of a PDF
@@ -375,7 +402,9 @@ def extract_pdf(url):
 def extract_html(url):
     """Fetch and extract main article text from an HTML URL via trafilatura."""
     try:
-        r = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT}, allow_redirects=True)
+        if DOWNLOAD_SLEEP:
+            time.sleep(DOWNLOAD_SLEEP)
+        r = SESSION.get(url, timeout=30, headers={"User-Agent": USER_AGENT}, allow_redirects=True)
         if r.status_code != 200:
             return None
         text = trafilatura.extract(r.text, output_format="markdown", include_tables=False)
@@ -460,7 +489,8 @@ def main():
 
     print(f"Total DOIs:     {len(dois)}")
     print(f"Already cached: {len(cache)}")
-    print(f"To fetch:       {len(to_fetch)}\n")
+    print(f"To fetch:       {len(to_fetch)}")
+    print(f"Download delay: {DOWNLOAD_SLEEP}s\n", flush=True)
 
     today = str(date.today())
     counts = {"pdf": 0, "html": 0, "pmc": 0, "not_found": 0}
@@ -481,7 +511,7 @@ def main():
             counts["not_found"] += 1
             label = "[NOT FOUND]"
 
-        print(f"  [{i:3d}/{len(to_fetch)}] {doi[:48]:<48}  {label}")
+        print(f"  [{i:3d}/{len(to_fetch)}] {doi[:48]:<48}  {label}", flush=True)
 
         if i % 50 == 0:
             with open(OUTPUT, "w", encoding="utf-8") as f:
