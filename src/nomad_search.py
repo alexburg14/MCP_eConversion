@@ -19,7 +19,10 @@ import requests
 
 _API = "https://nomad-lab.eu/prod/v1/api/v1/entries/query"
 _GUI = "https://nomad-lab.eu/prod/v1/gui/entry/id/{}"
-_TIMEOUT = 20
+# authors.name queries are the slow path — averaging ~10s and observed to exceed 30s
+# for a high-volume depositor. 20s produced false "could not reach NOMAD" errors on
+# queries that were merely slow.
+_TIMEOUT = 45
 
 # Returned per hit. crystal_system is null for molecules/clusters and for entries
 # whose parser never resolved symmetry — that absence is informative, not a gap.
@@ -33,6 +36,24 @@ _FIELDS = [
 ]
 
 
+# pis_cache.json stores names with academic titles ("Prof. Dr. Karsten Reuter") but
+# NOMAD's authors.name is a bare depositor name, and the match is exact — passing a
+# titled name straight from get_pi() returns zero hits. Strip leading titles so the
+# get_pi -> search_nomad chain works without the caller reformatting the name.
+_TITLE_TOKENS = frozenset({
+    "prof", "prof.", "dr", "dr.", "pd", "pd.", "priv.-doz.", "priv.-doz",
+    "apl.", "apl", "hon.-prof.", "em.", "mr", "mr.", "ms", "ms.", "mrs", "mrs.",
+})
+
+
+def _strip_titles(name: str) -> str:
+    """Drop leading academic-title tokens. 'Prof. Dr. Karsten Reuter' -> 'Karsten Reuter'."""
+    tokens = name.split()
+    while tokens and tokens[0].lower() in _TITLE_TOKENS:
+        tokens.pop(0)
+    return " ".join(tokens)
+
+
 def search_nomad(
     elements: str = "",
     formula: str = "",
@@ -44,6 +65,8 @@ def search_nomad(
 
     `elements` is comma-separated ("Ti,O") and matches entries containing ALL of them.
     `formula` matches NOMAD's reduced form (alphabetical, e.g. SrTiO3 -> "O3SrTi").
+    `author` is matched exactly against NOMAD's depositor names; academic titles are
+    stripped first so a name from get_pi() can be passed through unchanged.
     """
     query: dict = {}
     element_list = [e.strip() for e in elements.split(",") if e.strip()]
@@ -51,8 +74,9 @@ def search_nomad(
         query["results.material.elements"] = {"all": element_list}
     if formula.strip():
         query["results.material.chemical_formula_reduced"] = formula.strip()
-    if author.strip():
-        query["authors.name"] = author.strip()
+    author_clean = _strip_titles(author.strip())
+    if author_clean:
+        query["authors.name"] = author_clean
     if text.strip():
         query["text_search_contents"] = text.strip()
 
@@ -95,7 +119,10 @@ def search_nomad(
         })
 
     return {
-        "filters": {"elements": elements, "formula": formula, "author": author, "text": text},
+        "filters": {
+            "elements": elements, "formula": formula,
+            "author": author_clean, "text": text,
+        },
         "ranked_by": order_by,
         "total_matches": body["pagination"]["total"],
         "returned": len(entries),
