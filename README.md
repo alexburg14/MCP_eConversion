@@ -71,6 +71,21 @@ Runtime code (server, search, chat app) lives under `src/`; one-shot build and e
 
 ## Rebuilding the caches
 
+The caches have a dependency order (embeddings need abstracts; the graph needs the
+PI list). `build.py` at the repo root expresses that order and rebuilds only what's
+out of date:
+
+```bash
+python build.py --list     # show every target and whether it's stale
+python build.py all        # build everything out-of-date, in dependency order
+python build.py embeddings # build one target (and its dependencies)
+```
+
+If a required source input is missing (e.g. the publications CSV), the build stops
+with a message naming the file to place under `data/` — this is the onboarding
+contract when adapting the template to a new cluster. The individual scripts below
+can still be run directly for manual or advanced use (e.g. their `--force` flags).
+
 **Abstracts + metadata** — when new papers are added, or to refresh citation counts:
 
 ```bash
@@ -123,6 +138,7 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 
 | File | Purpose |
 |---|---|
+| `build.py` | Cache build orchestrator — rebuilds the `data/` caches in dependency order, skipping up-to-date targets |
 | `config.toml` | Cluster-specific settings (name, description, LLM endpoint, models) — the one file to edit when adapting the template |
 | `src/config.py` | Loads `config.toml` once into a frozen, typed `Config` object via `get_config()` |
 | `src/server.py` | MCP server entry point — the single source of truth for all tool definitions |
