@@ -54,6 +54,18 @@ one file; no Python changes are required. Publication and PI counts shown in the
 and system prompt are derived from the loaded caches, so they stay correct
 automatically.
 
+## Tests
+
+```bash
+python -m pytest tests/
+```
+
+Unit tests over the domain logic — BM25 search, PI name normalization and lookup,
+the collaboration graph, NOMAD input validation, and the MCP→OpenAI tool bridge.
+They import the `src/` modules directly (never the Streamlit app), so they double
+as a regression harness independent of the UI. They assert against the built
+caches, so run `python build.py` first if `data/` is empty.
+
 ## Chat interface
 
 A Streamlit web app that lets researchers ask questions in natural language. It calls the search tools internally and uses an LLM from the GWDG SAIA / Academic Cloud Chat AI endpoint (OpenAI-compatible, `https://chat-ai.academiccloud.de/v1`) to synthesize answers. The model is selectable in the sidebar (default `qwen3.5-122b-a10b`; all listed models verified for tool calling).

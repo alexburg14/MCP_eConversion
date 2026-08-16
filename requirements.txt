@@ -17,3 +17,5 @@ networkx
 # chat interface (GWDG SAIA endpoint, OpenAI-compatible)
 openai
 streamlit
+# tests
+pytest
