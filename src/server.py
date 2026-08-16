@@ -8,6 +8,10 @@ import semantic_search
 import graph as _graph
 import nomad_search as _nomad
 from config import get_config
+from logging_config import configure_logging, get_logger
+
+configure_logging()
+log = get_logger("server")
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = _DATA_DIR / "data_publication_dois.csv"
@@ -29,6 +33,15 @@ _PIS: list = []
 if PIS_CACHE_PATH.exists():
     with open(PIS_CACHE_PATH, encoding="utf-8") as _f:
         _PIS = json.load(_f)
+
+log.info(
+    "caches loaded",
+    extra={"fields": {
+        "papers": len(papers),
+        "fulltexts": len(_FULLTEXTS),
+        "pis": len(_PIS),
+    }},
+)
 
 
 def _fold(s: str) -> str:
