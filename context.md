@@ -91,6 +91,13 @@ The 2026-06-05 report noted BM25 misses conceptual queries that use different vo
 
 This sits inside the [[project-direction]] "vectorless RAG by default" stance: PI lookups and exact-term searches stay lexical/structured; embeddings are one option among several rather than the default retrieval layer.
 
+### 11. Ingested locally-supplied full-text PDFs (`src/scripts/ingest_local_pdfs.py`)
+A collaborator supplied ~530 PDFs in `data/pdfs/`, mostly covering the DOIs the network pipeline (step 7) could not reach — DFG/ERC chemistry/physics behind publisher paywalls, obtained via institutional access. This script ingests them into the same `fulltext_cache.json` without re-fetching anything.
+
+Filenames encode the DOI in several separator spellings (`10.1002_adfm.201900233.pdf`, `10_1002_adfm_202505935.pdf`), so each file is matched to a corpus DOI by a separator-agnostic fingerprint (drop `_ / . -`, lowercase) rather than reversing one fixed mangling. Real PDFs are extracted with `pymupdf4llm`; the few files that are HTML landing pages saved with a `.pdf` name (header `<!DOC`, not `%PDF`) fall back to `trafilatura` — which recovers the body when the publisher inlines it (Nature Reviews) and is rejected by the `MIN_CHARS=3000` floor when the page is only a stub. When one DOI has several files, a real `%PDF` is preferred over an HTML copy. Entries are tagged `source_origin="collaborator"` and keyed by lowercase DOI to match `search.py` / `get_paper_fulltext` lookups; existing entries are never overwritten.
+
+Result: **403 → 852 cached (89.1% of 956)**. Of 450 corpus DOIs in the folder, 449 ingested (448 pdf + 1 html); one (`10.1039/d2cc03286d`) was only a figure-viewer stub and stays missing. 70 `duplicate_`-prefixed files were skipped as redundant, and 8 PDFs whose DOIs are not on the 956-paper list (3 ChemRxiv preprints + 5 others) were left out pending a corpus-scope decision.
+
 ---
 
 ## What Worked
@@ -105,7 +112,7 @@ This sits inside the [[project-direction]] "vectorless RAG by default" stance: P
 - ~~**Author names are truncated**~~ Resolved 2026-06-12: OpenAlex `authorships` are overlaid onto all results (see step 9). The CSV column itself is still truncated (upstream scraper bug) but no longer surfaces anywhere. Note: OpenAlex names contain Unicode-hyphen variants (U+2010 vs ASCII `-`) — normalize before exact author matching / co-authorship graphs.
 - ~~**BM25 is still lexical**~~ Resolved 2026-06-12: `semantic_search_papers` (BGE-small embeddings) covers conceptual/synonym queries as a parallel tool (see step 10).
 - **Single-user setup** — currently runs locally on one machine, not accessible cluster-wide
-- **Full-text coverage is partial** — 402/956 (42%) cached. The 554 remaining are dominated by DFG/ERC-funded EU chemistry/physics with no preprint and no PMC deposit; would need institutional access to recover. Wiley/ACS-without-NIH-funding is the dominant failure mode.
+- **Full-text coverage is partial** — 852/956 (89%) cached after ingesting the collaborator's PDFs (step 11); was 402/956 (42%) from the network pipeline alone. The ~104 still missing are papers with no preprint, no PMC deposit, and not in that folder. Wiley/ACS-without-NIH-funding is the dominant failure mode.
 - **Full text is not yet wired into search** — `fulltext_cache.json` is populated but `search_papers` still searches only abstracts. Next step: either extend BM25 to full text or let the LLM call `get_paper_fulltext` for top candidates.
 
 ---
@@ -120,7 +127,7 @@ This sits inside the [[project-direction]] "vectorless RAG by default" stance: P
 - **Keep caches fresh**: run `build_abstracts_cache.py` and `build_pis_cache.py` when the website changes (the former also refreshes citation counts); rebuild `embeddings_cache.npz` after abstract refresh
 
 ### Medium term
-- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 402 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
+- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 852 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
 - **Migrate from JSON to a database**: SQLite is the natural first step (same format as the `.enl`). PostgreSQL when cluster-wide concurrent access is needed.
 - **PDF extractor upgrade**: PyMuPDF4LLM is sufficient for plain prose. For papers with complex layouts/equations/tables, upgrade to Marker (ML-based, surya models ~1-2GB) or MinerU (heaviest, best quality).
 
@@ -142,10 +149,11 @@ Repo is split into `src/` (code, tracked) and `data/` (caches and source data, g
 | `src/scripts/build_abstracts_cache.py` | Rebuilds abstracts cache (.enl → OpenAlex → S2) + OpenAlex authors / journal / citation_count per entry |
 | `src/scripts/build_embeddings_cache.py` | Encodes title+abstract with BGE-small into `data/embeddings_cache.npz` |
 | `src/scripts/build_fulltext_cache.py` | Multi-source full-text pipeline: arXiv → PMC (JATS XML) → repos → publisher PDFs → HTML fallback |
+| `src/scripts/ingest_local_pdfs.py` | Ingests locally-supplied PDFs from `data/pdfs/` (a collaborator's local full-texts) into `fulltext_cache.json`; DOI matched by separator-agnostic fingerprint, tagged `source_origin="collaborator"` |
 | `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and per-PI staff pages into `data/pis_cache.json` |
 | `data/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
 | `data/embeddings_cache.npz` | 956 × 384 BGE-small vectors + parallel DOI array |
-| `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI (source: pdf / html / pmc) |
+| `data/fulltext_cache.json` | 852 full-text bodies keyed by DOI (source: pdf / html / pmc; `source_origin` includes `collaborator` for locally-supplied PDFs) |
 | `data/pis_cache.json` | 42 PIs keyed by smid (name, group, dept, institution, research focus, application fields, publication DOIs) |
 | `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
 | `data/e-conversion-Converted.enl` | Source EndNote library (SQLite) |
