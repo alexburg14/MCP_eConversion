@@ -7,13 +7,14 @@ from search import load_papers, build_index, search, _ABSTRACTS, apply_cache
 import semantic_search
 import graph as _graph
 import nomad_search as _nomad
+from config import get_config
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = _DATA_DIR / "data_publication_dois.csv"
 FULLTEXT_CACHE_PATH = _DATA_DIR / "fulltext_cache.json"
 PIS_CACHE_PATH = _DATA_DIR / "pis_cache.json"
 
-mcp = FastMCP("eConversion Papers")
+mcp = FastMCP(get_config().cluster.display_name)
 
 papers = load_papers(CSV_PATH)
 index = build_index(papers)

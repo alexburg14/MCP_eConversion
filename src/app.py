@@ -20,20 +20,17 @@ from openai import OpenAI
 sys.path.insert(0, str(Path(__file__).parent))
 import server  # loads all caches at import time
 import corpus_map
+from config import get_config
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+_CFG = get_config()
 
-BASE_URL = "https://chat-ai.academiccloud.de/v1"
+BASE_URL = _CFG.llm.base_url
 
 # Tool calling verified against the live endpoint on 2026-06-12; the meeting
 # goal "mit welchen Modellen gut? Schlecht?" wants side-by-side comparison,
 # so the model is a sidebar choice rather than a constant.
-MODELS = [
-    "qwen3.5-122b-a10b",
-    "glm-4.7",
-    "openai-gpt-oss-120b",
-    "mistral-large-3-675b-instruct-2512",
-]
+MODELS = list(_CFG.llm.models)
 
 
 def _load_dotenv() -> None:
@@ -301,14 +298,13 @@ _TOOLS = [
     },
 ]
 
-_BASE_SYSTEM = """\
-You are a research assistant for the e-conversion energy research cluster, \
-a consortium of ~42 research groups at TUM, LMU, FHI, and MPI focused on energy conversion.
+_BASE_SYSTEM = f"""\
+You are a research assistant for {_CFG.cluster.description}.
 
-You have access to a local database of 956 cluster publications (with abstracts and \
-some full texts) and profiles of 42 PIs. Use the tools to retrieve relevant information \
-before answering. Always cite papers by title and DOI. If information is missing from \
-the database, say so clearly — do not invent facts.
+You have access to a local database of {len(server.papers)} cluster publications (with \
+abstracts and some full texts) and profiles of {len(server._PIS)} PIs. Use the tools to \
+retrieve relevant information before answering. Always cite papers by title and DOI. If \
+information is missing from the database, say so clearly — do not invent facts.
 
 Two paper-search tools complement each other:
 - search_papers (BM25, lexical): exact terms, acronyms, formulas, author names.
@@ -448,9 +444,9 @@ def _build_corpus_map(n_clusters: int) -> list[dict]:
 # Streamlit UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="eConversion Assistant", page_icon="⚡", layout="centered")
-st.title("⚡ eConversion Knowledge Assistant")
-st.caption("956 publications · 42 PIs · TUM / LMU / FHI / MPI FKF")
+st.set_page_config(page_title=_CFG.cluster.display_name, page_icon="⚡", layout="centered")
+st.title(f"⚡ {_CFG.cluster.display_name}")
+st.caption(f"{len(server.papers)} publications · {len(server._PIS)} PIs")
 
 tab_chat, tab_map = st.tabs(["💬 Chat", "🗺️ Corpus Map"])
 
@@ -506,7 +502,8 @@ with tab_chat:
         st.error("Set `API_KEY` in your environment or in `.env` at the repo root and restart the app.")
         st.stop()
 
-    model = st.sidebar.selectbox("Model", MODELS, index=0)
+    _default_idx = MODELS.index(_CFG.llm.default_model) if _CFG.llm.default_model in MODELS else 0
+    model = st.sidebar.selectbox("Model", MODELS, index=_default_idx)
     st.sidebar.caption(f"Endpoint: {BASE_URL}")
 
     client = OpenAI(api_key=api_key, base_url=BASE_URL)

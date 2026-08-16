@@ -44,6 +44,15 @@ To run it manually:
 python src/server.py
 ```
 
+## Configuration
+
+Cluster-specific settings — the cluster's name and description, the LLM endpoint,
+and the selectable models — live in [`config.toml`](config.toml) at the repo root.
+Adapting the assistant to a different research cluster is a matter of editing that
+one file; no Python changes are required. Publication and PI counts shown in the UI
+and system prompt are derived from the loaded caches, so they stay correct
+automatically.
+
 ## Chat interface
 
 A Streamlit web app that lets researchers ask questions in natural language. It calls the search tools internally and uses an LLM from the GWDG SAIA / Academic Cloud Chat AI endpoint (OpenAI-compatible, `https://chat-ai.academiccloud.de/v1`) to synthesize answers. The model is selectable in the sidebar (default `qwen3.5-122b-a10b`; all listed models verified for tool calling).
@@ -114,6 +123,8 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 
 | File | Purpose |
 |---|---|
+| `config.toml` | Cluster-specific settings (name, description, LLM endpoint, models) — the one file to edit when adapting the template |
+| `src/config.py` | Loads `config.toml` once into a frozen, typed `Config` object via `get_config()` |
 | `src/server.py` | MCP server entry point — exposes all paper / PI tools |
 | `src/search.py` | Two-stage BM25 search engine + abstracts/metadata cache reader |
 | `src/semantic_search.py` | BGE-small cosine search; lazy-loads model and embeddings on first call |

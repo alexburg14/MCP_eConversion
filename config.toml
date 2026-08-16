@@ -1,0 +1,24 @@
+# Cluster-specific settings for the knowledge-assistant template.
+#
+# This is the ONE file to edit when adapting the assistant to a different
+# research cluster — no Python changes required. Loaded once by src/config.py.
+
+[cluster]
+# Short internal name.
+name = "e-conversion"
+# Title shown in the browser tab and app header.
+display_name = "eConversion Knowledge Assistant"
+# One clause describing the cluster, injected into the assistant's system prompt.
+description = "the e-conversion energy research cluster, a consortium of ~42 research groups at TUM, LMU, FHI, and MPI focused on energy conversion"
+website = "https://e-conversion.de"
+
+[llm]
+# OpenAI-compatible chat endpoint. Default: GWDG SAIA / Academic Cloud.
+base_url = "https://chat-ai.academiccloud.de/v1"
+default_model = "qwen3.5-122b-a10b"
+models = [
+    "qwen3.5-122b-a10b",
+    "glm-4.7",
+    "openai-gpt-oss-120b",
+    "mistral-large-3-675b-instruct-2512",
+]
