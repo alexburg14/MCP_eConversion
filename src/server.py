@@ -6,7 +6,7 @@ from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
-from search import load_papers, build_index, search, _ABSTRACTS, apply_cache
+from search import load_papers, build_index, search, _ABSTRACTS, apply_cache, safe_load_json
 import semantic_search
 import graph as _graph
 import nomad_search as _nomad
@@ -23,28 +23,39 @@ PIS_CACHE_PATH = _DATA_DIR / "pis_cache.json"
 
 mcp = FastMCP(get_config().cluster.display_name)
 
-papers = load_papers(CSV_PATH)
+# The publications CSV is the required foundation — BM25 cannot index an empty
+# corpus, so a missing/empty CSV fails loud with an actionable message rather
+# than starting a server that can answer nothing.
+try:
+    papers = load_papers(CSV_PATH)
+except OSError as _exc:
+    log.error("publications CSV unreadable", exc_info=True, extra={"fields": {"path": str(CSV_PATH)}})
+    raise RuntimeError(
+        f"Cannot read the publications CSV at {CSV_PATH}. "
+        f"Run `python build.py` or place the file there. ({_exc})"
+    ) from _exc
+if not papers:
+    raise RuntimeError(f"No publications loaded from {CSV_PATH} — is the CSV empty?")
+
 index = build_index(papers)
 papers_by_doi = {p["doi"].lower(): p for p in papers}
 
-_FULLTEXTS: dict = {}
-if FULLTEXT_CACHE_PATH.exists():
-    with open(FULLTEXT_CACHE_PATH, encoding="utf-8") as _f:
-        _FULLTEXTS = json.load(_f)
+# Optional enrichment caches: a missing or corrupt one degrades a single feature
+# (full text, PI profiles) rather than crashing the server.
+_FULLTEXTS: dict = safe_load_json(FULLTEXT_CACHE_PATH, "fulltext") or {}
+_PIS: list = safe_load_json(PIS_CACHE_PATH, "pis") or []
 
-_PIS: list = []
-if PIS_CACHE_PATH.exists():
-    with open(PIS_CACHE_PATH, encoding="utf-8") as _f:
-        _PIS = json.load(_f)
+# Snapshot of every cache's state, surfaced by the status tool.
+CACHE_STATUS: dict = {
+    "papers": {"available": bool(papers), "count": len(papers)},
+    "abstracts": {"available": bool(_ABSTRACTS), "count": len(_ABSTRACTS)},
+    "fulltext": {"available": bool(_FULLTEXTS), "count": len(_FULLTEXTS)},
+    "pis": {"available": bool(_PIS), "count": len(_PIS)},
+    "embeddings": {"available": semantic_search.is_available()},
+    "graph": {"available": _graph.is_available()},
+}
 
-log.info(
-    "caches loaded",
-    extra={"fields": {
-        "papers": len(papers),
-        "fulltexts": len(_FULLTEXTS),
-        "pis": len(_PIS),
-    }},
-)
+log.info("caches loaded", extra={"fields": {k: v.get("count", v["available"]) for k, v in CACHE_STATUS.items()}})
 
 
 def _fold(s: str) -> str:

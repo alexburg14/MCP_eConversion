@@ -3,18 +3,33 @@ import json
 from pathlib import Path
 from rank_bm25 import BM25Okapi
 
+from logging_config import get_logger
+
+log = get_logger("search")
+
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _CACHE_PATH = _DATA_DIR / "abstracts_cache.json"
 
 
-def _load_abstracts_cache():
-    if _CACHE_PATH.exists():
-        with open(_CACHE_PATH, encoding="utf-8") as f:
+def safe_load_json(path: Path, label: str):
+    """Load a JSON cache, returning None (not raising) on absence or corruption.
+
+    A missing or malformed optional cache should degrade one feature, not crash
+    the whole server at import. Callers substitute an empty default and the
+    status tool reports the gap.
+    """
+    if not path.exists():
+        log.warning("cache missing", extra={"fields": {"cache": label, "path": str(path)}})
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
-    return {}
+    except (json.JSONDecodeError, OSError):
+        log.error("cache corrupt", exc_info=True, extra={"fields": {"cache": label}})
+        return None
 
 
-_ABSTRACTS = _load_abstracts_cache()
+_ABSTRACTS = safe_load_json(_CACHE_PATH, "abstracts") or {}
 
 
 def load_papers(csv_path):
