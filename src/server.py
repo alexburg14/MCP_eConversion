@@ -2,7 +2,10 @@ import json
 import re
 import unicodedata
 from pathlib import Path
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 from search import load_papers, build_index, search, _ABSTRACTS, apply_cache
 import semantic_search
 import graph as _graph
@@ -113,7 +116,9 @@ def _pi_summary(pi: dict) -> dict:
 
 
 @mcp.tool()
-def get_paper_by_doi(doi: str) -> str:
+def get_paper_by_doi(
+    doi: Annotated[str, Field(description="DOI of the paper, e.g. 10.1103/physrevb.110.125202")],
+) -> str:
     """Return metadata and abstract for a single paper by its DOI.
     Includes full author list, journal, and citation count when present in the OpenAlex metadata cache."""
     doi_key = doi.strip().lower()
@@ -126,7 +131,9 @@ def get_paper_by_doi(doi: str) -> str:
 
 
 @mcp.tool()
-def get_paper_fulltext(doi: str) -> str:
+def get_paper_fulltext(
+    doi: Annotated[str, Field(description="DOI of the paper")],
+) -> str:
     """Return full text for a single paper by DOI, if available.
     Full text is only available for open-access papers (~65% of the corpus)."""
     doi = doi.strip().lower()
@@ -144,7 +151,9 @@ def get_paper_fulltext(doi: str) -> str:
 
 
 @mcp.tool()
-def search_papers(query: str) -> str:
+def search_papers(
+    query: Annotated[str, Field(description="Keyword search query")],
+) -> str:
     """Lexical (BM25) search over e-conversion cluster publications.
     Best for exact terminology, acronyms, author names, or any query where the
     user's words are likely to appear verbatim in the title or abstract.
@@ -155,7 +164,9 @@ def search_papers(query: str) -> str:
 
 
 @mcp.tool()
-def semantic_search_papers(query: str) -> str:
+def semantic_search_papers(
+    query: Annotated[str, Field(description="Conceptual / semantic search query")],
+) -> str:
     """Semantic (embedding) search over e-conversion cluster publications.
     Best for conceptual queries that may use different vocabulary than the
     abstracts — e.g. 'splitting water with sunlight' finding photocatalytic OER
@@ -173,7 +184,10 @@ def semantic_search_papers(query: str) -> str:
 
 
 @mcp.tool()
-def get_similar_papers(doi: str, top_k: int = 5) -> str:
+def get_similar_papers(
+    doi: Annotated[str, Field(description="DOI of the paper to find similar papers for")],
+    top_k: Annotated[int, Field(description="How many similar papers to return (default 5)")] = 5,
+) -> str:
     """Return papers most similar to a given paper, by embedding distance.
     Use for 'what else is like the paper I'm reading?' — unlike semantic_search_papers
     (which takes a text query), this takes a DOI and compares its own embedding to
@@ -191,7 +205,12 @@ def get_similar_papers(doi: str, top_k: int = 5) -> str:
 
 
 @mcp.tool()
-def list_papers(author: str = "", year: str = "", journal: str = "", limit: int = 50) -> str:
+def list_papers(
+    author: Annotated[str, Field(description="Author surname or name substring, e.g. 'Rinke'")] = "",
+    year: Annotated[str, Field(description="Exact publication year, e.g. '2022'")] = "",
+    journal: Annotated[str, Field(description="Journal name substring, e.g. 'Nature'")] = "",
+    limit: Annotated[int, Field(description="Max papers to return (default 50)")] = 50,
+) -> str:
     """List cluster publications matching exact metadata filters, newest first.
     Unlike search_papers / semantic_search_papers (which rank by relevance and return only
     the top 5), this returns EVERY paper matching the filters — use it for exhaustive
@@ -244,7 +263,9 @@ def list_papers(author: str = "", year: str = "", journal: str = "", limit: int 
 
 
 @mcp.tool()
-def search_pis(query: str) -> str:
+def search_pis(
+    query: Annotated[str, Field(description="Keyword query (name, topic, field)")],
+) -> str:
     """Search e-conversion PIs (principal investigators) by name, research area, or keyword.
     Returns the top 5 matching PIs with their group, institution, research focus, and publication count.
     Accent-insensitive: 'muller' matches 'Müller-Buschbaum'."""
@@ -266,7 +287,9 @@ def search_pis(query: str) -> str:
 
 
 @mcp.tool()
-def get_pi(name: str) -> str:
+def get_pi(
+    name: Annotated[str, Field(description="PI last name or full name, e.g. 'Rinke' or 'Patrick Rinke'")],
+) -> str:
     """Return full profile for a PI by name (last name or full name).
     Includes group, institution, research focus, application fields, website, and their publications
     (titles + abstracts) from the cache. Accent-insensitive: 'Cortes' matches 'Cortés'."""
@@ -350,7 +373,13 @@ def get_pi(name: str) -> str:
 
 
 @mcp.tool()
-def search_nomad(elements: str = "", formula: str = "", author: str = "", text: str = "", limit: int = 5) -> str:
+def search_nomad(
+    elements: Annotated[str, Field(description="Comma-separated elements; matches entries containing ALL, e.g. 'Ti,O'")] = "",
+    formula: Annotated[str, Field(description="NOMAD reduced formula, alphabetical, e.g. 'O3SrTi' for SrTiO3")] = "",
+    author: Annotated[str, Field(description="Depositor name, e.g. 'Karsten Reuter'")] = "",
+    text: Annotated[str, Field(description="Free-text search; results are relevance-ranked")] = "",
+    limit: Annotated[int, Field(description="Max entries to return (default 5)")] = 5,
+) -> str:
     """Search the public NOMAD materials-science repository for computed/experimental entries.
     This is EXTERNAL data — not e-conversion publications. Use it for "is there NOMAD data on
     material X?" or "what has PI Y deposited?", not for finding cluster papers.
@@ -369,7 +398,9 @@ def search_nomad(elements: str = "", formula: str = "", author: str = "", text: 
 
 
 @mcp.tool()
-def get_collaborators(pi_query: str) -> str:
+def get_collaborators(
+    pi_query: Annotated[str, Field(description="PI last name or full name, e.g. 'Rinke'")],
+) -> str:
     """Return all PIs who share at least one publication with the queried PI, most-shared first.
     Accepts last name, full name, or smid. Use this for 'who does X work with?' questions."""
     if not _graph.is_available():
@@ -378,7 +409,10 @@ def get_collaborators(pi_query: str) -> str:
 
 
 @mcp.tool()
-def joint_papers(pi_a: str, pi_b: str) -> str:
+def joint_papers(
+    pi_a: Annotated[str, Field(description="First PI last name or full name")],
+    pi_b: Annotated[str, Field(description="Second PI last name or full name")],
+) -> str:
     """Return the DOIs of papers co-authored by two named PIs.
     Returns an empty list if the two PIs have never co-published.
     Accepts last name or full name for each PI."""
@@ -388,7 +422,9 @@ def joint_papers(pi_a: str, pi_b: str) -> str:
 
 
 @mcp.tool()
-def collaboration_centrality(top_k: int = 10) -> str:
+def collaboration_centrality(
+    top_k: Annotated[int, Field(description="How many top PIs to return (default 10)")] = 10,
+) -> str:
     """Return PIs ranked by betweenness centrality in the co-authorship graph.
     High centrality = a PI bridges otherwise-separate research groups.
     Use for 'who are the connectors / bridges in the cluster?' questions."""

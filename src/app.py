@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import server  # loads all caches at import time
 import corpus_map
 from config import get_config
+import openai_tools
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CFG = get_config()
@@ -47,256 +48,11 @@ def _load_dotenv() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tool definitions (OpenAI function-calling format)
+# Tools: schemas and dispatch are derived from the MCP registry (server.py),
+# the single source of truth. See openai_tools.py.
 # ---------------------------------------------------------------------------
 
-_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_papers",
-            "description": (
-                "Lexical (BM25) search over e-conversion cluster publications. "
-                "Best for exact terminology, acronyms, formulas, or author names — "
-                "any query where the user's words are likely to appear verbatim. "
-                "Returns the top 5 matching papers with titles, authors, abstracts, "
-                "and any linked datasets."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Keyword search query"}
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "semantic_search_papers",
-            "description": (
-                "Semantic (embedding) search over e-conversion cluster publications. "
-                "Best for conceptual queries where the user's vocabulary may differ "
-                "from the abstracts (synonyms, paraphrases, lay descriptions). "
-                "Example: 'splitting water with sunlight' finds photocatalytic OER "
-                "papers that never use those exact words. For exact terms, prefer search_papers. "
-                "Returns the top 5 matching papers ranked by cosine similarity."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Conceptual / semantic search query"}
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_similar_papers",
-            "description": (
-                "Return papers most similar to a given paper, by embedding distance. "
-                "Use for 'what else is like the paper I'm reading?' — takes a DOI "
-                "(not a text query) and compares its embedding to every other paper's. "
-                "Requires the paper to be in the embeddings cache."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doi": {"type": "string", "description": "DOI of the paper to find similar papers for"},
-                    "top_k": {"type": "integer", "description": "How many similar papers to return (default 5)"},
-                },
-                "required": ["doi"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_papers",
-            "description": (
-                "List ALL cluster publications matching exact metadata filters "
-                "(author, year, journal), newest first — not just the top 5. "
-                "Use for exhaustive listings: 'every paper by Rinke', 'papers in Nature', "
-                "'what the cluster published in 2022'. Filters combine with AND; at least "
-                "one is required. Author/journal are accent-insensitive substring matches, "
-                "year is exact."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "author": {"type": "string", "description": "Author surname or name substring, e.g. 'Rinke'"},
-                    "year": {"type": "string", "description": "Exact publication year, e.g. '2022'"},
-                    "journal": {"type": "string", "description": "Journal name substring, e.g. 'Nature'"},
-                    "limit": {"type": "integer", "description": "Max papers to return (default 50)"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_paper_by_doi",
-            "description": "Return full metadata and abstract for a single paper given its DOI.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doi": {"type": "string", "description": "DOI of the paper, e.g. 10.1103/physrevb.110.125202"}
-                },
-                "required": ["doi"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_paper_fulltext",
-            "description": (
-                "Return full-text markdown for a paper by DOI. "
-                "Only available for the ~42% of open-access papers in the cache. "
-                "Use when the abstract is insufficient and deeper content is needed."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doi": {"type": "string", "description": "DOI of the paper"}
-                },
-                "required": ["doi"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_pis",
-            "description": (
-                "Search e-conversion principal investigators (PIs) by name, research area, "
-                "or application field keyword. Returns the top 5 matching PIs."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Keyword query (name, topic, field)"}
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_pi",
-            "description": (
-                "Return the full profile of a PI by name (last name or full name). "
-                "Includes group, institution, research focus, application fields, website, "
-                "and up to 10 of their publications from the abstract cache."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "PI last name or full name, e.g. 'Rinke' or 'Patrick Rinke'"}
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_collaborators",
-            "description": (
-                "Return all PIs who share at least one publication with the queried PI, "
-                "ordered by number of shared papers. Use for 'who does X work with?' questions."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pi_query": {"type": "string", "description": "PI last name or full name, e.g. 'Rinke'"}
-                },
-                "required": ["pi_query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "joint_papers",
-            "description": (
-                "Return the DOIs of papers co-authored by two specific PIs. "
-                "Returns count=0 and empty list if they have never co-published."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pi_a": {"type": "string", "description": "First PI last name or full name"},
-                    "pi_b": {"type": "string", "description": "Second PI last name or full name"},
-                },
-                "required": ["pi_a", "pi_b"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "collaboration_centrality",
-            "description": (
-                "Return PIs ranked by betweenness centrality — those who bridge otherwise "
-                "separate research groups. Use for 'who are the connectors in the cluster?' questions."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "top_k": {"type": "integer", "description": "How many top PIs to return (default 10)"}
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "collaboration_communities",
-            "description": (
-                "Return communities (clusters) of PIs who collaborate more internally than externally, "
-                "detected via greedy modularity on the co-authorship graph. "
-                "Use for 'which groups work closely together?' questions."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_nomad",
-            "description": (
-                "Search the public NOMAD materials-science repository (EXTERNAL data — "
-                "computed/experimental entries, NOT e-conversion publications). Use for "
-                "'is there NOMAD data on material X?' or 'what has PI Y deposited?'. "
-                "Filters combine with AND; at least one is required. Lead with total_matches: "
-                "broad filters match tens of thousands of entries, so the returned list is a "
-                "sample, not 'the results'. NOMAD entries cannot be linked back to a paper's DOI."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "elements": {"type": "string", "description": "Comma-separated elements; matches entries containing ALL, e.g. 'Ti,O'"},
-                    "formula": {"type": "string", "description": "NOMAD reduced formula, alphabetical, e.g. 'O3SrTi' for SrTiO3"},
-                    "author": {"type": "string", "description": "Depositor name, e.g. 'Karsten Reuter'"},
-                    "text": {"type": "string", "description": "Free-text search; results are relevance-ranked"},
-                    "limit": {"type": "integer", "description": "Max entries to return (default 5)"},
-                },
-                "required": [],
-            },
-        },
-    },
-]
+_TOOLS = openai_tools.build_openai_tools()
 
 _BASE_SYSTEM = f"""\
 You are a research assistant for {_CFG.cluster.description}.
@@ -363,36 +119,6 @@ _SYSTEM = _build_system_prompt()
 _MAX_TOOL_ROUNDS = 10
 
 
-def _dispatch(name: str, inputs: dict) -> str:
-    dispatch = {
-        "search_papers": lambda i: server.search_papers(i["query"]),
-        "semantic_search_papers": lambda i: server.semantic_search_papers(i["query"]),
-        "get_similar_papers": lambda i: server.get_similar_papers(i["doi"], i.get("top_k", 5)),
-        "get_paper_by_doi": lambda i: server.get_paper_by_doi(i["doi"]),
-        "get_paper_fulltext": lambda i: server.get_paper_fulltext(i["doi"]),
-        "list_papers": lambda i: server.list_papers(
-            i.get("author", ""), i.get("year", ""), i.get("journal", ""), i.get("limit", 50)
-        ),
-        "search_pis": lambda i: server.search_pis(i["query"]),
-        "get_pi": lambda i: server.get_pi(i["name"]),
-        "get_collaborators": lambda i: server.get_collaborators(i["pi_query"]),
-        "joint_papers": lambda i: server.joint_papers(i["pi_a"], i["pi_b"]),
-        "collaboration_centrality": lambda i: server.collaboration_centrality(i.get("top_k", 10)),
-        "collaboration_communities": lambda i: server.collaboration_communities(),
-        "search_nomad": lambda i: server.search_nomad(
-            i.get("elements", ""), i.get("formula", ""), i.get("author", ""),
-            i.get("text", ""), i.get("limit", 5),
-        ),
-    }
-    fn = dispatch.get(name)
-    if fn is None:
-        return json.dumps({"error": f"Unknown tool: {name}"})
-    try:
-        return fn(inputs)
-    except KeyError as exc:
-        return json.dumps({"error": f"Missing argument for {name}: {exc}"})
-
-
 def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list[str]]:
     """Run the tool-use loop; return (answer_text, list_of_tool_calls_summary)."""
     tool_log: list[str] = []
@@ -424,7 +150,7 @@ def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
-            result = _dispatch(tc.function.name, args)
+            result = openai_tools.call_tool(tc.function.name, args)
             tool_log.append(f"`{tc.function.name}({(tc.function.arguments or '')[:80]})`")
             msgs.append({
                 "role": "tool",

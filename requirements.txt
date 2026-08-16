@@ -1,6 +1,7 @@
 rank-bm25
 requests
-mcp
+# pinned: openai_tools.py reads the tool registry via a private FastMCP API
+mcp==1.28.1
 trafilatura
 pymupdf4llm
 # semantic search

@@ -125,7 +125,8 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 |---|---|
 | `config.toml` | Cluster-specific settings (name, description, LLM endpoint, models) — the one file to edit when adapting the template |
 | `src/config.py` | Loads `config.toml` once into a frozen, typed `Config` object via `get_config()` |
-| `src/server.py` | MCP server entry point — exposes all paper / PI tools |
+| `src/server.py` | MCP server entry point — the single source of truth for all tool definitions |
+| `src/openai_tools.py` | Derives the chat app's OpenAI tool schemas and dispatch from the MCP registry — no hand-maintained duplicate |
 | `src/search.py` | Two-stage BM25 search engine + abstracts/metadata cache reader |
 | `src/semantic_search.py` | BGE-small cosine search; lazy-loads model and embeddings on first call |
 | `src/nomad_search.py` | Live query against the public NOMAD API (no cache, no credentials) |
