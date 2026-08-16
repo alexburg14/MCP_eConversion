@@ -1,6 +1,7 @@
 import json
 import re
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -452,6 +453,38 @@ def collaboration_communities() -> str:
     if not _graph.is_available():
         return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
     return json.dumps(_graph.collaboration_communities(), indent=2, ensure_ascii=False)
+
+
+# Cache name -> file whose mtime is its "last built" time, for server_status.
+_CACHE_PATHS = {
+    "papers": CSV_PATH,
+    "abstracts": _DATA_DIR / "abstracts_cache.json",
+    "fulltext": FULLTEXT_CACHE_PATH,
+    "pis": PIS_CACHE_PATH,
+    "embeddings": _DATA_DIR / "embeddings_cache.npz",
+    "graph": _DATA_DIR / "collaboration_graph.json",
+}
+
+
+@mcp.tool()
+def server_status() -> str:
+    """Report the assistant's health: cluster, tool count, LLM endpoint, and each
+    data cache's availability, size, and last-built time. Use to check whether the
+    assistant is fully loaded or to diagnose missing / stale data."""
+    cfg = get_config()
+    caches = {}
+    for name, state in CACHE_STATUS.items():
+        path = _CACHE_PATHS.get(name)
+        last_built = None
+        if path and path.exists():
+            last_built = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+        caches[name] = {**state, "last_built": last_built}
+    return json.dumps({
+        "cluster": cfg.cluster.name,
+        "tools": len(mcp._tool_manager.list_tools()),
+        "llm": {"endpoint": cfg.llm.base_url, "models": list(cfg.llm.models)},
+        "caches": caches,
+    }, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

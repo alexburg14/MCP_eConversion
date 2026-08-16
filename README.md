@@ -29,6 +29,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 | `joint_papers(pi_a, pi_b)` | DOIs of papers co-authored by two named PIs. |
 | `collaboration_centrality(top_k)` | PIs ranked by betweenness centrality in the co-authorship graph — the connectors between otherwise-separate groups. |
 | `collaboration_communities()` | Clusters of PIs who collaborate internally more than externally (greedy modularity detection). |
+| `server_status()` | Health check — cluster, tool count, LLM endpoint, and each data cache's availability, size, and last-built time. |
 
 ## Setup
 
