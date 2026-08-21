@@ -9,3 +9,4 @@ reports
 .env
 .cc-history
 eConversion_KnowledgeBase_Introduction.pptx
+src/scripts/report_missing_fulltexts.py
