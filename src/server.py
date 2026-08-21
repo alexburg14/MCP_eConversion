@@ -18,9 +18,9 @@ configure_logging()
 log = get_logger("server")
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-CSV_PATH = _DATA_DIR / "data_publication_dois.csv"
-FULLTEXT_CACHE_PATH = _DATA_DIR / "fulltext_cache.json"
-PIS_CACHE_PATH = _DATA_DIR / "pis_cache.json"
+CSV_PATH = _DATA_DIR / "sources" / "data_publication_dois.csv"
+FULLTEXT_CACHE_PATH = _DATA_DIR / "cache" / "fulltext_cache.json"
+PIS_CACHE_PATH = _DATA_DIR / "cache" / "pis_cache.json"
 
 mcp = FastMCP(get_config().cluster.display_name)
 
@@ -458,11 +458,11 @@ def collaboration_communities() -> str:
 # Cache name -> file whose mtime is its "last built" time, for server_status.
 _CACHE_PATHS = {
     "papers": CSV_PATH,
-    "abstracts": _DATA_DIR / "abstracts_cache.json",
+    "abstracts": _DATA_DIR / "cache" / "abstracts_cache.json",
     "fulltext": FULLTEXT_CACHE_PATH,
     "pis": PIS_CACHE_PATH,
-    "embeddings": _DATA_DIR / "embeddings_cache.npz",
-    "graph": _DATA_DIR / "collaboration_graph.json",
+    "embeddings": _DATA_DIR / "cache" / "embeddings_cache.npz",
+    "graph": _DATA_DIR / "cache" / "collaboration_graph.json",
 }
 
 

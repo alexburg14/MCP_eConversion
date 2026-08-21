@@ -95,7 +95,7 @@ from many. Iterate with different phrasings, then summarize.
 Answer in the same language as the question (German or English).\
 """
 
-_PROPOSAL_SUMMARY_PATH = _REPO_ROOT / "data" / "proposal_summary.md"
+_PROPOSAL_SUMMARY_PATH = _REPO_ROOT / "data" / "cache" / "proposal_summary.md"
 
 
 def _build_system_prompt() -> str:

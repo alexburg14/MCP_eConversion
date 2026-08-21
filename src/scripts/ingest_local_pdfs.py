@@ -30,9 +30,9 @@ import pymupdf4llm
 import trafilatura
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-CSV = DATA_DIR / "data_publication_dois.csv"
-PDF_DIR = DATA_DIR / "pdfs"
-OUTPUT = DATA_DIR / "fulltext_cache.json"
+CSV = DATA_DIR / "sources" / "data_publication_dois.csv"
+PDF_DIR = DATA_DIR / "sources" / "pdfs"
+OUTPUT = DATA_DIR / "cache" / "fulltext_cache.json"
 MIN_CHARS = 3000  # same floor as build_fulltext_cache.py: rejects landing-page stubs
 SOURCE_ORIGIN = "collaborator"
 
@@ -125,7 +125,7 @@ def main() -> None:
             "fulltext": text,
             "source": source,
             "source_origin": SOURCE_ORIGIN,
-            "url": f"local:data/pdfs/{chosen.name}",
+            "url": f"local:data/sources/pdfs/{chosen.name}",
             "char_count": len(text),
             "fetched_at": today,
         }

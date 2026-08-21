@@ -29,8 +29,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-CSV = DATA_DIR / "data_publication_dois.csv"
-OUTPUT = DATA_DIR / "fulltext_cache.json"
+CSV = DATA_DIR / "sources" / "data_publication_dois.csv"
+OUTPUT = DATA_DIR / "cache" / "fulltext_cache.json"
 EMAIL = "audit@econversion.de"
 MIN_CHARS = 3000  # full articles are typically 10k+ chars; this filters landing pages
 FORCE = "--force" in sys.argv

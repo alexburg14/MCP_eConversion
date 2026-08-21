@@ -8,7 +8,7 @@ from logging_config import get_logger
 log = get_logger("search")
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_CACHE_PATH = _DATA_DIR / "abstracts_cache.json"
+_CACHE_PATH = _DATA_DIR / "cache" / "abstracts_cache.json"
 
 
 def safe_load_json(path: Path, label: str):

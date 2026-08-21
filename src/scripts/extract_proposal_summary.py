@@ -13,8 +13,8 @@ from pathlib import Path
 import pymupdf
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-PROPOSAL_PDF = _DATA_DIR / "EXC_2089_e-conversion_A_Proposal_R.pdf"
-OUTPUT_MD = _DATA_DIR / "proposal_summary.md"
+PROPOSAL_PDF = _DATA_DIR / "sources" / "EXC_2089_e-conversion_A_Proposal_R.pdf"
+OUTPUT_MD = _DATA_DIR / "cache" / "proposal_summary.md"
 
 
 def _extract_full_text(pdf_path: Path) -> str:

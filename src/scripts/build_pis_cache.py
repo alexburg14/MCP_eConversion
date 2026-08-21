@@ -25,7 +25,7 @@ if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-OUTPUT = DATA_DIR / "pis_cache.json"
+OUTPUT = DATA_DIR / "cache" / "pis_cache.json"
 LISTING_URL = "https://www.e-conversion.de/members/"
 PROFILE_URL_TMPL = "https://www.e-conversion.de/single-staff-page/?smid={smid}"
 FORCE = "--force" in sys.argv
@@ -172,7 +172,7 @@ def main() -> None:
         time.sleep(SLEEP)
 
     pis = sorted(by_smid.values(), key=lambda p: p.get("last_name", ""))
-    DATA_DIR.mkdir(exist_ok=True)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(pis, indent=2, ensure_ascii=False), encoding="utf-8")
 
     with_dois = sum(1 for p in pis if p.get("publication_dois"))

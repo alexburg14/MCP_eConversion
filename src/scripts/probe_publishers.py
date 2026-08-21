@@ -22,8 +22,8 @@ from pathlib import Path
 import requests
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-CSV_PATH = DATA_DIR / "data_publication_dois.csv"
-FULLTEXT = DATA_DIR / "fulltext_cache.json"
+CSV_PATH = DATA_DIR / "sources" / "data_publication_dois.csv"
+FULLTEXT = DATA_DIR / "cache" / "fulltext_cache.json"
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

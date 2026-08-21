@@ -28,9 +28,9 @@ import requests
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-ENL = DATA_DIR / "e-conversion-Converted.enl"
-CSV = DATA_DIR / "data_publication_dois.csv"
-OUTPUT = DATA_DIR / "abstracts_cache.json"
+ENL = DATA_DIR / "sources" / "e-conversion-Converted.enl"
+CSV = DATA_DIR / "sources" / "data_publication_dois.csv"
+OUTPUT = DATA_DIR / "cache" / "abstracts_cache.json"
 EMAIL = "audit@econversion.de"
 CHECKPOINT_EVERY = 50
 

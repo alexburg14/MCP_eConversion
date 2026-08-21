@@ -80,7 +80,7 @@ SAIA keys expire after 6 months — renew at https://saia.gwdg.de/dashboard.
 
 ## Layout
 
-Runtime code (server, search, chat app) lives under `src/`; one-shot build and extract scripts live under `src/scripts/`; data caches and source files live under `data/`. The `data/` directory is gitignored — caches must be built locally (see below).
+Runtime code (server, search, chat app) lives under `src/`; one-shot build and extract scripts live under `src/scripts/`. Everything data lives under `data/`, split into two layers: `data/sources/` holds ground-truth inputs — the publications CSV, the EndNote library, the proposal PDF, and the locally-supplied full-text PDFs under `data/sources/pdfs/` — which are never regenerated; `data/cache/` holds everything the build scripts produce. The `data/` directory is gitignored — the caches are built locally, and the source inputs must be placed under `data/sources/` (see below).
 
 ## Rebuilding the caches
 
@@ -95,7 +95,7 @@ python build.py embeddings # build one target (and its dependencies)
 ```
 
 If a required source input is missing (e.g. the publications CSV), the build stops
-with a message naming the file to place under `data/` — this is the onboarding
+with a message naming the file to place under `data/sources/` — this is the onboarding
 contract when adapting the template to a new cluster. The individual scripts below
 can still be run directly for manual or advanced use (e.g. their `--force` flags).
 
@@ -121,7 +121,7 @@ Per-DOI pipeline that tries sources in tier order: arXiv → PMC (NCBI eutils, J
 python src/scripts/build_pis_cache.py
 ```
 
-Writes `data/pis_cache.json` with one entry per PI. Re-run anytime the members list changes; pass `--force` to refresh existing entries.
+Writes `data/cache/pis_cache.json` with one entry per PI. Re-run anytime the members list changes; pass `--force` to refresh existing entries.
 
 **Embeddings** — dense vectors for `semantic_search_papers`:
 
@@ -129,7 +129,7 @@ Writes `data/pis_cache.json` with one entry per PI. Re-run anytime the members l
 python src/scripts/build_embeddings_cache.py
 ```
 
-Encodes `title + abstract` for every paper in the abstract cache with `BAAI/bge-small-en-v1.5` (384-d, L2-normalised) and writes `data/embeddings_cache.npz`. Re-run only when the abstract cache changes. First run downloads the model (~130 MB).
+Encodes `title + abstract` for every paper in the abstract cache with `BAAI/bge-small-en-v1.5` (384-d, L2-normalised) and writes `data/cache/embeddings_cache.npz`. Re-run only when the abstract cache changes. First run downloads the model (~130 MB).
 
 **Collaboration graph** — PI co-authorship graph for the `get_collaborators` / `joint_papers` / `collaboration_centrality` / `collaboration_communities` tools:
 
@@ -137,7 +137,7 @@ Encodes `title + abstract` for every paper in the abstract cache with `BAAI/bge-
 python src/scripts/build_graph_cache.py
 ```
 
-Two PIs are linked iff they share a publication DOI (factual set intersection over `pis_cache.json`, no name disambiguation needed). Writes `data/collaboration_graph.json`. Re-run only when `pis_cache.json` changes.
+Two PIs are linked iff they share a publication DOI (factual set intersection over `pis_cache.json`, no name disambiguation needed). Writes `data/cache/collaboration_graph.json`. Re-run only when `pis_cache.json` changes.
 
 **Proposal summary** — one-shot extraction of Section 2 of the e-conversion 2.0 DFG proposal, used as system-prompt context in the chat interface:
 
@@ -145,13 +145,13 @@ Two PIs are linked iff they share a publication DOI (factual set intersection ov
 python src/scripts/extract_proposal_summary.py
 ```
 
-Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_summary.md` (~1.5K tokens). Re-run only if the proposal PDF changes.
+Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/cache/proposal_summary.md` (~1.5K tokens). Re-run only if the proposal PDF changes.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `build.py` | Cache build orchestrator — rebuilds the `data/` caches in dependency order, skipping up-to-date targets |
+| `build.py` | Cache build orchestrator — rebuilds the `data/cache/` outputs in dependency order, skipping up-to-date targets |
 | `config.toml` | Cluster-specific settings (name, description, LLM endpoint, models) — the one file to edit when adapting the template |
 | `src/config.py` | Loads `config.toml` once into a frozen, typed `Config` object via `get_config()` |
 | `src/server.py` | MCP server entry point — the single source of truth for all tool definitions |
@@ -159,21 +159,23 @@ Reads `data/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/proposal_su
 | `src/search.py` | Two-stage BM25 search engine + abstracts/metadata cache reader |
 | `src/semantic_search.py` | BGE-small cosine search; lazy-loads model and embeddings on first call |
 | `src/nomad_search.py` | Live query against the public NOMAD API (no cache, no credentials) |
-| `src/scripts/build_abstracts_cache.py` | Rebuilds `data/abstracts_cache.json`: abstracts (`.enl` → OpenAlex → S2) plus OpenAlex authors / journal / citation count |
-| `src/scripts/build_embeddings_cache.py` | Encodes title + abstract with BGE-small into `data/embeddings_cache.npz` |
+| `src/scripts/build_abstracts_cache.py` | Rebuilds `data/cache/abstracts_cache.json`: abstracts (`.enl` → OpenAlex → S2) plus OpenAlex authors / journal / citation count |
+| `src/scripts/build_embeddings_cache.py` | Encodes title + abstract with BGE-small into `data/cache/embeddings_cache.npz` |
 | `src/scripts/build_fulltext_cache.py` | Multi-source full-text builder (arXiv → PMC → repos → publisher PDFs → HTML) |
-| `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/pis_cache.json` |
-| `src/scripts/build_graph_cache.py` | Builds the PI co-authorship graph into `data/collaboration_graph.json` |
-| `src/scripts/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/proposal_summary.md` |
+| `src/scripts/ingest_local_pdfs.py` | Ingests the local `data/sources/pdfs/` (a collaborator's local full-texts) into `data/cache/fulltext_cache.json`, keyed by DOI |
+| `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/cache/pis_cache.json` |
+| `src/scripts/build_graph_cache.py` | Builds the PI co-authorship graph into `data/cache/collaboration_graph.json` |
+| `src/scripts/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/cache/proposal_summary.md` |
 | `src/graph.py` | Loads `collaboration_graph.json` into networkx; backs the collaboration-graph tools |
-| `data/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
-| `data/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
-| `data/fulltext_cache.json` | 402 full-text bodies keyed by DOI |
-| `data/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
-| `data/collaboration_graph.json` | Node-link JSON of the PI co-authorship graph |
-| `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
-| `data/e-conversion-Converted.enl` | Source EndNote library (SQLite format) |
-| `data/scraper_cache.json` | Raw scraper output from e-conversion.de |
-| `data/EXC_2089_e-conversion_A_Proposal_R.pdf` | Source PDF of the e-conversion 2.0 DFG proposal |
-| `data/proposal_summary.md` | Section 2 of the proposal, extracted for chat-interface system context |
+| `data/sources/data_publication_dois.csv` | *(source)* 956 papers + 148 dataset links |
+| `data/sources/e-conversion-Converted.enl` | *(source)* EndNote library (SQLite format) |
+| `data/sources/scraper_cache.json` | *(source)* Raw scraper output from e-conversion.de |
+| `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` | *(source)* PDF of the e-conversion 2.0 DFG proposal |
+| `data/sources/pdfs/` | *(source)* Locally-supplied full-text PDFs (a collaborator's local full-texts), filenames encode the DOI; `_unmatched/` holds off-corpus and stub PDFs pending triage |
+| `data/cache/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
+| `data/cache/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
+| `data/cache/fulltext_cache.json` | 852 full-text bodies keyed by DOI |
+| `data/cache/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
+| `data/cache/collaboration_graph.json` | Node-link JSON of the PI co-authorship graph |
+| `data/cache/proposal_summary.md` | Section 2 of the proposal, extracted for chat-interface system context |
 | `.mcp.json` | Claude Code MCP server registration |

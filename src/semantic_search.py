@@ -13,7 +13,7 @@ import numpy as np
 from search import apply_cache
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_CACHE_PATH = _DATA_DIR / "embeddings_cache.npz"
+_CACHE_PATH = _DATA_DIR / "cache" / "embeddings_cache.npz"
 
 _dois: np.ndarray | None = None
 _vectors: np.ndarray | None = None

@@ -15,8 +15,8 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-PIS = DATA_DIR / "pis_cache.json"
-OUTPUT = DATA_DIR / "collaboration_graph.json"
+PIS = DATA_DIR / "cache" / "pis_cache.json"
+OUTPUT = DATA_DIR / "cache" / "collaboration_graph.json"
 
 
 def _doi_set(pi: dict) -> set:

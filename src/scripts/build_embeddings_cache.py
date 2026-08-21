@@ -16,9 +16,9 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-ABSTRACTS = DATA_DIR / "abstracts_cache.json"
-CSV_PATH = DATA_DIR / "data_publication_dois.csv"
-OUTPUT = DATA_DIR / "embeddings_cache.npz"
+ABSTRACTS = DATA_DIR / "cache" / "abstracts_cache.json"
+CSV_PATH = DATA_DIR / "sources" / "data_publication_dois.csv"
+OUTPUT = DATA_DIR / "cache" / "embeddings_cache.npz"
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
 BATCH_SIZE = 32
 

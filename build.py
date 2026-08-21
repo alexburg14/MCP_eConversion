@@ -12,9 +12,10 @@ Usage:
     python build.py embeddings graph  # build specific targets (+ their deps)
     python build.py all --force       # rebuild everything unconditionally
 
-Source inputs a target needs (e.g. the publications CSV) are the template's
-onboarding contract: if one is missing, the build stops with an explicit message
-naming the file to place under data/, rather than failing deep inside a script.
+Source inputs a target needs (e.g. the publications CSV) live under data/sources/
+and are the template's onboarding contract: if one is missing, the build stops
+with an explicit message naming the file to place under data/sources/, rather
+than failing deep inside a script. Rebuilt outputs are written to data/cache/.
 """
 from __future__ import annotations
 
@@ -26,6 +27,8 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
 _DATA = _ROOT / "data"
+_SOURCES = _DATA / "sources"   # ground-truth inputs (never regenerated)
+_CACHE = _DATA / "cache"       # rebuildable outputs (everything below is a target)
 _SCRIPTS = _ROOT / "src" / "scripts"
 
 
@@ -82,14 +85,14 @@ def _mtime(path: Path) -> float:
 def _prereq_paths(name: str) -> list[Path]:
     """All files whose change should invalidate this target: source inputs + dep outputs."""
     t = TARGETS[name]
-    paths = [_DATA / i for i in t.inputs]
-    paths += [_DATA / TARGETS[d].output for d in t.deps]
+    paths = [_SOURCES / i for i in t.inputs]
+    paths += [_CACHE / TARGETS[d].output for d in t.deps]
     return paths
 
 
 def is_stale(name: str) -> bool:
     """True if the target needs (re)building: output missing, or older than any prereq."""
-    out = _DATA / TARGETS[name].output
+    out = _CACHE / TARGETS[name].output
     if not out.exists():
         return True
     return _mtime(out) < max((_mtime(p) for p in _prereq_paths(name)), default=0.0)
@@ -97,10 +100,10 @@ def is_stale(name: str) -> bool:
 
 def _check_inputs(name: str) -> None:
     """Stop with an actionable message if a required source input is missing."""
-    missing = [i for i in TARGETS[name].inputs if not (_DATA / i).exists()]
+    missing = [i for i in TARGETS[name].inputs if not (_SOURCES / i).exists()]
     if missing:
         for i in missing:
-            print(f"  ! required input missing: place '{i}' under {_DATA}", file=sys.stderr)
+            print(f"  ! required input missing: place '{i}' under {_SOURCES}", file=sys.stderr)
         sys.exit(2)
 
 
@@ -120,6 +123,7 @@ def _resolve_order(names: list[str]) -> list[str]:
 
 
 def build(names: list[str], force: bool) -> None:
+    _CACHE.mkdir(parents=True, exist_ok=True)  # scripts write their outputs here
     for name in _resolve_order(names):
         if not force and not is_stale(name):
             print(f"= {name}: up to date ({TARGETS[name].output})")

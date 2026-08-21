@@ -14,7 +14,7 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_GRAPH_PATH = _DATA_DIR / "collaboration_graph.json"
+_GRAPH_PATH = _DATA_DIR / "cache" / "collaboration_graph.json"
 
 _graph: nx.Graph | None = None
 

@@ -98,6 +98,9 @@ Filenames encode the DOI in several separator spellings (`10.1002_adfm.201900233
 
 Result: **403 → 852 cached (89.1% of 956)**. Of 450 corpus DOIs in the folder, 449 ingested (448 pdf + 1 html); one (`10.1039/d2cc03286d`) was only a figure-viewer stub and stays missing. 70 `duplicate_`-prefixed files were skipped as redundant, and 8 PDFs whose DOIs are not on the 956-paper list (3 ChemRxiv preprints + 5 others) were left out pending a corpus-scope decision.
 
+### 12. Split `data/` into sources vs cache (`data/sources/`, `data/cache/`)
+The flat `data/` dir mixed ground-truth inputs with rebuildable outputs, so "what is safe to delete and regenerate" was implicit. Reorganized into `data/sources/` (publications CSV, `.enl`, proposal PDF, and a collaborator's PDFs under `data/sources/pdfs/` — never regenerated) and `data/cache/` (everything `build.py` produces). Path constants across the build scripts, the runtime modules (`search.py`, `semantic_search.py`, `graph.py`, `corpus_map.py`, `server.py`, `app.py`), and `build.py`'s dependency graph now resolve inputs from `sources/` and outputs to `cache/`; the 449 `source_origin="collaborator"` provenance urls were rewritten `local:data/pdfs/…` → `local:data/sources/pdfs/…` (all verified to resolve). During the move the 70 `duplicate_` PDFs were deleted and the 8 off-corpus PDFs + the `10.1039/d2cc03286d` HTML stub were quarantined to `data/sources/pdfs/_unmatched/` pending a corpus-scope decision. `data/` is gitignored, so the tracked change is code + docs only; `build.py` fails loud naming the missing file under `data/sources/` if a required input is absent. 26/26 tests green.
+
 ---
 
 ## What Worked
@@ -139,7 +142,7 @@ Result: **403 → 852 cached (89.1% of 956)**. Of 450 corpus DOIs in the folder,
 ---
 
 ## Key Files
-Repo is split into `src/` (code, tracked) and `data/` (caches and source data, gitignored).
+Repo is split into `src/` (code, tracked) and `data/` (gitignored), the latter split into `data/sources/` (ground-truth inputs, never regenerated) and `data/cache/` (everything `build.py` rebuilds).
 
 | File | Purpose |
 |---|---|
@@ -147,14 +150,15 @@ Repo is split into `src/` (code, tracked) and `data/` (caches and source data, g
 | `src/search.py` | Two-stage BM25 search (title → abstract fallback) + abstracts/metadata cache reader |
 | `src/semantic_search.py` | Cosine search over BGE-small embeddings; lazy-loads model on first call |
 | `src/scripts/build_abstracts_cache.py` | Rebuilds abstracts cache (.enl → OpenAlex → S2) + OpenAlex authors / journal / citation_count per entry |
-| `src/scripts/build_embeddings_cache.py` | Encodes title+abstract with BGE-small into `data/embeddings_cache.npz` |
+| `src/scripts/build_embeddings_cache.py` | Encodes title+abstract with BGE-small into `data/cache/embeddings_cache.npz` |
 | `src/scripts/build_fulltext_cache.py` | Multi-source full-text pipeline: arXiv → PMC (JATS XML) → repos → publisher PDFs → HTML fallback |
-| `src/scripts/ingest_local_pdfs.py` | Ingests locally-supplied PDFs from `data/pdfs/` (a collaborator's local full-texts) into `fulltext_cache.json`; DOI matched by separator-agnostic fingerprint, tagged `source_origin="collaborator"` |
-| `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and per-PI staff pages into `data/pis_cache.json` |
-| `data/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
-| `data/embeddings_cache.npz` | 956 × 384 BGE-small vectors + parallel DOI array |
-| `data/fulltext_cache.json` | 852 full-text bodies keyed by DOI (source: pdf / html / pmc; `source_origin` includes `collaborator` for locally-supplied PDFs) |
-| `data/pis_cache.json` | 42 PIs keyed by smid (name, group, dept, institution, research focus, application fields, publication DOIs) |
-| `data/data_publication_dois.csv` | 956 papers + 148 dataset links |
-| `data/e-conversion-Converted.enl` | Source EndNote library (SQLite) |
-| `data/scraper_cache.json` | Raw scraper output from e-conversion.de |
+| `src/scripts/ingest_local_pdfs.py` | Ingests locally-supplied PDFs from `data/sources/pdfs/` (a collaborator's local full-texts) into `fulltext_cache.json`; DOI matched by separator-agnostic fingerprint, tagged `source_origin="collaborator"` |
+| `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and per-PI staff pages into `data/cache/pis_cache.json` |
+| `data/sources/data_publication_dois.csv` | *(source)* 956 papers + 148 dataset links |
+| `data/sources/e-conversion-Converted.enl` | *(source)* EndNote library (SQLite) |
+| `data/sources/scraper_cache.json` | *(source)* Raw scraper output from e-conversion.de |
+| `data/sources/pdfs/` | *(source)* A collaborator's full-text PDFs, keyed by DOI; `_unmatched/` holds off-corpus + stub files |
+| `data/cache/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
+| `data/cache/embeddings_cache.npz` | 956 × 384 BGE-small vectors + parallel DOI array |
+| `data/cache/fulltext_cache.json` | 852 full-text bodies keyed by DOI (source: pdf / html / pmc; `source_origin` includes `collaborator` for locally-supplied PDFs) |
+| `data/cache/pis_cache.json` | 42 PIs keyed by smid (name, group, dept, institution, research focus, application fields, publication DOIs) |

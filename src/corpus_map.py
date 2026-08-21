@@ -25,7 +25,7 @@ from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_CACHE_PATH = _DATA_DIR / "embeddings_cache.npz"
+_CACHE_PATH = _DATA_DIR / "cache" / "embeddings_cache.npz"
 
 _TERMS_PER_LABEL = 3
 
