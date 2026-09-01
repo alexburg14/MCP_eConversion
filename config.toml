@@ -13,7 +13,8 @@ description = "the e-conversion energy research cluster, a consortium of ~42 res
 website = "https://e-conversion.de"
 
 [llm]
-# OpenAI-compatible chat endpoint. Default: GWDG SAIA / Academic Cloud.
+# OpenAI-compatible chat endpoints. Multiple providers can be defined and are
+# selectable in the sidebar. The first entry is the default.
 base_url = "https://chat-ai.academiccloud.de/v1"
 default_model = "qwen3.5-122b-a10b"
 models = [
@@ -21,4 +22,28 @@ models = [
     "glm-4.7",
     "openai-gpt-oss-120b",
     "mistral-large-3-675b-instruct-2512",
+]
+
+[llm.providers]
+
+[llm.providers.gwdg]
+base_url = "https://chat-ai.academiccloud.de/v1"
+default_model = "qwen3.5-122b-a10b"
+models = [
+    "qwen3.5-122b-a10b",
+    "glm-4.7",
+    "openai-gpt-oss-120b",
+    "mistral-large-3-675b-instruct-2512",
+]
+
+[llm.providers.openrouter]
+# API key env var for this provider (not the shared API_KEY used by GWDG)
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+default_model = "openai/gpt-4o"
+models = [
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-3.5-sonnet",
+    "google/gemini-2.0-flash",
 ]

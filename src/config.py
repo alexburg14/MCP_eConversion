@@ -9,7 +9,7 @@ object via ``get_config()``.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -25,16 +25,38 @@ class ClusterConfig:
 
 
 @dataclass(frozen=True)
+class Provider:
+    """One selectable LLM provider (OpenAI-compatible endpoint)."""
+    name: str
+    base_url: str
+    default_model: str
+    models: tuple[str, ...]
+    # environment variable holding the API key for this provider
+    api_key_env: str = "API_KEY"
+
+
+@dataclass(frozen=True)
 class LLMConfig:
     base_url: str
     default_model: str
     models: tuple[str, ...]
+    providers: dict[str, Provider] | None = None
 
 
 @dataclass(frozen=True)
 class Config:
     cluster: ClusterConfig
     llm: LLMConfig
+    providers: dict[str, Provider] = field(default_factory=dict)
+
+
+def _llm_from(raw_llm: dict, name: str = "llm") -> LLMConfig:
+    """Build LLMConfig from a raw [llm] or [llm.providers.X] dict."""
+    return LLMConfig(
+        base_url=raw_llm["base_url"],
+        default_model=raw_llm["default_model"],
+        models=tuple(raw_llm["models"]),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -42,11 +64,19 @@ def get_config() -> Config:
     """Load and cache config.toml. Raises if the file or a required key is missing."""
     with open(_CONFIG_PATH, "rb") as f:
         raw = tomllib.load(f)
+    llm_raw = raw["llm"]
+    providers_raw = llm_raw.get("providers", {})
+    providers: dict[str, Provider] = {}
+    for name, prov in providers_raw.items():
+        providers[name] = Provider(
+            name=name,
+            base_url=prov["base_url"],
+            default_model=prov["default_model"],
+            models=tuple(prov["models"]),
+            api_key_env=prov.get("api_key_env", "API_KEY"),
+        )
     return Config(
         cluster=ClusterConfig(**raw["cluster"]),
-        llm=LLMConfig(
-            base_url=raw["llm"]["base_url"],
-            default_model=raw["llm"]["default_model"],
-            models=tuple(raw["llm"]["models"]),
-        ),
+        llm=_llm_from(llm_raw, "llm"),
+        providers=providers,
     )

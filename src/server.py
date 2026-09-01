@@ -59,6 +59,25 @@ CACHE_STATUS: dict = {
 log.info("caches loaded", extra={"fields": {k: v.get("count", v["available"]) for k, v in CACHE_STATUS.items()}})
 
 
+def _preload_semantic_model() -> None:
+    """Load the sentence-transformer model at startup so the first chat
+    request doesn't stall on a HF download inside the tool loop."""
+    try:
+        import threading
+        def _do() -> None:
+            try:
+                semantic_search._load()
+                log.info("semantic model preloaded")
+            except Exception as exc:
+                log.warning("semantic model preload failed", extra={"error": str(exc)[:200]})
+        threading.Thread(target=_do, daemon=True).start()
+    except Exception:
+        pass
+
+
+_preload_semantic_model()
+
+
 def _fold(s: str) -> str:
     """Lowercase + strip accents (NFKD). 'Müller' -> 'muller', 'Cortés' -> 'cortes'."""
     if not s:

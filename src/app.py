@@ -33,6 +33,85 @@ BASE_URL = _CFG.llm.base_url
 # so the model is a sidebar choice rather than a constant.
 MODELS = list(_CFG.llm.models)
 
+# OpenRouter: dynamically fetch models that satisfy the account's guardrails
+# and cost under 1 EUR / M tokens (prompt AND completion). Falls back to the
+# static config list if the fetch fails or no key is configured.
+_OPENROUTER_MAX_PRICE_PER_MTOK = 1.0  # EUR-equivalent cap (approx. USD 1.0)
+_PRICE_PER_TOKEN_CAP = _OPENROUTER_MAX_PRICE_PER_MTOK / 1_000_000
+
+
+def _fetch_openrouter_models(api_key: str) -> tuple[list[str], list[str]]:
+    """Return (cheapest_model_ids, all_model_ids) allowed by the user's guardrails,
+    under the price cap, and with an agentic index >= 35.
+
+    The guardrail-filtered list comes from /models/user; benchmark data (agentic
+    index) only exists in the full /models list, so we intersect both.
+    """
+    import requests
+
+    def _price_ok(m) -> bool:
+        pricing = m.get("pricing", {}) or {}
+        try:
+            prompt = float(pricing.get("prompt") or 0)
+            completion = float(pricing.get("completion") or 0)
+        except (TypeError, ValueError):
+            return False
+        if prompt < 0 or completion < 0:
+            return False
+        return prompt <= _PRICE_PER_TOKEN_CAP and completion <= _PRICE_PER_TOKEN_CAP
+
+    def _agentic_ok(m) -> bool:
+        b = m.get("benchmarks", {}) or {}
+        aa = b.get("artificial_analysis", {}) or {}
+        try:
+            return float(aa.get("agentic_index") or 0) >= 35.0
+        except (TypeError, ValueError):
+            return False
+
+    def _tool_calling_ok(m) -> bool:
+        # the assistant depends on tool calling for paper search; require the
+        # model to advertise tool support
+        return "tools" in (m.get("supported_parameters") or [])
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        r_user = requests.get("https://openrouter.ai/api/v1/models/user", headers=headers, timeout=15)
+        r_user.raise_for_status()
+        user_ids = {m.get("id", "") for m in r_user.json().get("data", [])}
+    except Exception:
+        return [], []
+
+    try:
+        r_all = requests.get("https://openrouter.ai/api/v1/models", timeout=15)
+        r_all.raise_for_status()
+        all_models = r_all.json().get("data", [])
+    except Exception:
+        return [], []
+
+    eligible: list[tuple[str, float]] = []  # (model_id, prompt_price_per_token)
+    all_ids: list[str] = []
+    for m in all_models:
+        mid = m.get("id", "")
+        if mid not in user_ids:
+            continue
+        # skip :free endpoints — weak data guarantees (ZDR is enforced per
+        # request via provider.zdr, but free hosts are often unstable)
+        if mid.endswith(":free") or ":free" in mid:
+            continue
+        if not _price_ok(m) or not _agentic_ok(m) or not _tool_calling_ok(m):
+            continue
+        all_ids.append(mid)
+        try:
+            prompt = float((m.get("pricing", {}) or {}).get("prompt") or 0)
+        except (TypeError, ValueError):
+            prompt = float("inf")
+        eligible.append((mid, prompt))
+
+    # sort by prompt price, cheapest first
+    eligible.sort(key=lambda x: x[1])
+    cheapest = [mid for mid, _ in eligible]
+    return cheapest, all_ids
+
 
 def _load_dotenv() -> None:
     """Set vars from the repo-root .env if not already in the environment."""
@@ -119,17 +198,27 @@ _SYSTEM = _build_system_prompt()
 _MAX_TOOL_ROUNDS = 10
 
 
-def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list[str]]:
+def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str]]:
     """Run the tool-use loop; return (answer_text, list_of_tool_calls_summary)."""
     tool_log: list[str] = []
     msgs = [{"role": "system", "content": _SYSTEM}] + list(messages)
+    kwargs = dict(tools=_TOOLS)
+    extra_body: dict | None = None
+    if extra:
+        # OpenRouter-specific fields (provider routing, zdr, ...) must go in
+        # extra_body; the OpenAI SDK rejects unknown top-level kwargs.
+        if "provider" in extra:
+            extra_body = {"provider": extra["provider"]}
+        else:
+            kwargs.update(extra)
 
     for _ in range(_MAX_TOOL_ROUNDS):
         response = client.chat.completions.create(
             model=model,
             max_tokens=2048,
             messages=msgs,
-            tools=_TOOLS,
+            extra_body=extra_body,
+            **kwargs,
         )
         msg = response.choices[0].message
 
@@ -223,16 +312,50 @@ with tab_map:
 
 with tab_chat:
     _load_dotenv()
-    api_key = os.environ.get("API_KEY", "")
+
+    # Provider selection: default provider first, then any additional ones
+    # defined in config.toml under [llm.providers].
+    providers = _CFG.providers or {}
+    provider_names = list(providers.keys()) if providers else []
+    provider = None
+    if provider_names:
+        default_provider = next((n for n, p in providers.items() if p.base_url == _CFG.llm.base_url), provider_names[0])
+        provider_name = st.sidebar.selectbox("Provider", provider_names, index=provider_names.index(default_provider))
+        provider = providers[provider_name]
+        base_url = provider.base_url
+        default_model = provider.default_model
+        api_key = os.environ.get(provider.api_key_env, "")
+        extra_kwargs: dict | None = None
+        # OpenRouter: no manual model/provider choice. Auto-pick the cheapest
+        # model that satisfies the account's guardrails and costs < 1 EUR/Mtok
+        # (in and out), and let OpenRouter route to the cheapest provider.
+        if "openrouter" in base_url:
+            cheapest, _all = _fetch_openrouter_models(api_key) if api_key else ([], [])
+            if cheapest:
+                model = cheapest[0]
+                # NOTE: no provider routing / zdr flag — it made OpenRouter return
+                # empty answers and slow requests. Guardrails (incl. any ZDR
+                # policy) are enforced server-side via /models/user already.
+                extra_kwargs = None
+                st.sidebar.caption(f"Endpoint: {base_url} · auto: cheapest (guardrails, agentic≥35, tools, <1€/Mtok)")
+            else:
+                model = default_model
+                st.sidebar.caption(f"Endpoint: {base_url} · static default (fetch failed, no key, or no match)")
+        else:
+            model = default_model
+            st.sidebar.caption(f"Endpoint: {base_url}")
+    else:
+        base_url = BASE_URL
+        default_model = _CFG.llm.default_model
+        model = default_model
+        api_key = os.environ.get("API_KEY", "")
+        st.sidebar.caption(f"Endpoint: {base_url}")
+
     if not api_key:
-        st.error("Set `API_KEY` in your environment or in `.env` at the repo root and restart the app.")
+        st.error("Set the API key for this provider in your environment or in `.env` at the repo root and restart the app.")
         st.stop()
 
-    _default_idx = MODELS.index(_CFG.llm.default_model) if _CFG.llm.default_model in MODELS else 0
-    model = st.sidebar.selectbox("Model", MODELS, index=_default_idx)
-    st.sidebar.caption(f"Endpoint: {BASE_URL}")
-
-    client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    client = OpenAI(api_key=api_key, base_url=base_url)
 
     # Chat history in session state
     if "messages" not in st.session_state:
@@ -255,7 +378,7 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("Searching..."):
                 try:
-                    answer, tool_calls = _answer(client, model, api_msgs)
+                    answer, tool_calls = _answer(client, model, api_msgs, extra=extra_kwargs)
                 except Exception as exc:
                     answer = f"Error: {exc}"
                     tool_calls = []
