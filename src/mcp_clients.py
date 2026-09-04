@@ -10,13 +10,16 @@ whatever the token allows is exactly what the chat exposes.
 Design notes
 ------------
 * Tokens are per-user, per-session (BYOK) or shared demo tokens.  They are kept
-  in Streamlit session state and passed as ``Authorization: Bearer`` headers --
-  never in the URL, never logged.
+  in Streamlit session state -- never logged.
+* Auth transport differs per proxy:
+    - elabmcp-proxy reads the token ONLY from the URL query (?token=...),
+      not from a header (verified 2026-09).
+    - datatagger-proxy accepts the token as query param OR as
+      Authorization: Bearer header.
+  So each endpoint carries its own auth mode; mcp_clients applies it.
 * The remote tool schemas are converted to OpenAI function-calling schemas and
   namespaced (``elab_*`` / ``dt_*``) so they cannot collide with the local
   paper tools.  ``call_tool`` dispatches on that prefix.
-* This module is deliberately stateless apart from the endpoint constants: the
-  caller (app.py) owns the tokens and the session lifecycle.
 """
 
 from __future__ import annotations
@@ -37,6 +40,14 @@ log = get_logger("mcp_clients")
 ELAB_MCP_URL = "https://researchmcp.duckdns.org/el/mcp"
 DATATAGGER_MCP_URL = "https://researchmcp.duckdns.org/dt/mcp"
 
+# Auth mode per endpoint:
+#   "query"  -> token appended as ?token=... (elabmcp-proxy ONLY reads query)
+#   "header" -> Authorization: Bearer <token> (datatagger-proxy)
+AUTH_MODES = {
+    "elab": "query",
+    "dt": "header",
+}
+
 # Prefixes used to namespace remote tools in the OpenAI tool list and to
 # dispatch calls back to the right server.
 PREFIXES = {
@@ -45,8 +56,12 @@ PREFIXES = {
 }
 
 
-def _auth_headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def _auth(url: str, token: str, mode: str) -> tuple[str, dict[str, str]]:
+    """Return (url_with_token, headers) for the given auth mode."""
+    if mode == "query":
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}token={token}", {}
+    return url, {"Authorization": f"Bearer {token}"}
 
 
 def _to_openai_schema(name: str, tool: dict[str, Any]) -> dict[str, Any]:
@@ -62,11 +77,12 @@ def _to_openai_schema(name: str, tool: dict[str, Any]) -> dict[str, Any]:
     return {"type": "function", "function": fn}
 
 
-async def _fetch_tools(url: str, token: str) -> list[dict[str, Any]]:
+async def _fetch_tools(url: str, token: str, mode: str) -> list[dict[str, Any]]:
     """Return the raw MCP tool list from one server (already JWT-filtered)."""
+    url_auth, headers = _auth(url, token, mode)
     async with AsyncExitStack() as stack:
         read, write, _ = await stack.enter_async_context(
-            streamablehttp_client(url, headers=_auth_headers(token))
+            streamablehttp_client(url_auth, headers=headers)
         )
         session = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
@@ -74,14 +90,15 @@ async def _fetch_tools(url: str, token: str) -> list[dict[str, Any]]:
         return [t.model_dump() for t in tools.tools]
 
 
-def _call_tool(url: str, token: str, name: str, arguments: dict[str, Any]) -> str:
+def _call_tool(url: str, token: str, mode: str, name: str, arguments: dict[str, Any]) -> str:
     """Call one tool on one remote server; always returns a JSON string."""
     import anyio
 
     async def _run() -> str:
+        url_auth, headers = _auth(url, token, mode)
         async with AsyncExitStack() as stack:
             read, write, _ = await stack.enter_async_context(
-                streamablehttp_client(url, headers=_auth_headers(token))
+                streamablehttp_client(url_auth, headers=headers)
             )
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -147,22 +164,22 @@ class RemoteClients:
         self.dt_token = dt_token
 
     @property
-    def active(self) -> list[tuple[str, str, str]]:
-        """(prefix, url, token) for each server the user has a token for."""
-        out: list[tuple[str, str, str]] = []
+    def active(self) -> list[tuple[str, str, str, str]]:
+        """(prefix, url, token, auth_mode) for each server the user has a token for."""
+        out: list[tuple[str, str, str, str]] = []
         if self.elab_token:
-            out.append(("elab", ELAB_MCP_URL, self.elab_token))
+            out.append(("elab", ELAB_MCP_URL, self.elab_token, AUTH_MODES["elab"]))
         if self.dt_token:
-            out.append(("dt", DATATAGGER_MCP_URL, self.dt_token))
+            out.append(("dt", DATATAGGER_MCP_URL, self.dt_token, AUTH_MODES["dt"]))
         return out
 
     def build_openai_tools(self) -> list[dict[str, Any]]:
         """Fetch remote tools and return OpenAI schemas (namespaced)."""
         schemas: list[dict[str, Any]] = []
-        for prefix, url, token in self.active:
+        for prefix, url, token, mode in self.active:
             try:
                 import anyio
-                tools = anyio.run(_fetch_tools, url, token)
+                tools = anyio.run(_fetch_tools, url, token, mode)
             except Exception as exc:  # noqa: BLE001
                 log.error("list remote tools failed", exc_info=True,
                           extra={"fields": {"url": url}})
@@ -179,10 +196,11 @@ class RemoteClients:
         """Dispatch a namespaced tool name to the right remote server."""
         prefix, _, raw_name = prefixed_name.partition("_")
         url = PREFIXES.get(prefix)
+        mode = AUTH_MODES.get(prefix)
         token = self.elab_token if prefix == "elab" else self.dt_token if prefix == "dt" else None
-        if not url or not token or not raw_name:
+        if not url or not token or not mode or not raw_name:
             return json.dumps({"error": f"Unknown remote tool: {prefixed_name}"})
-        return _call_tool(url, token, raw_name, arguments)
+        return _call_tool(url, token, mode, raw_name, arguments)
 
 
 def _error_tool(prefix: str, err: str) -> dict[str, Any]:
