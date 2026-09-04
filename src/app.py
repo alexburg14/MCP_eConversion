@@ -397,14 +397,23 @@ with tab_chat:
     # They live in session state only and are passed to the *already running*
     # MCP proxies. The tool selection itself is decided by each token (proxy
     # filters tools/list).
-    with st.sidebar.expander("🔌 Datenquellen (eLabFTW / DataTagger)", expanded=False):
+    with st.sidebar.expander("🔌 Data sources (eLabFTW / DataTagger)", expanded=False):
         # Bring-your-own-token: each user registers their personal JWT on the
         # proxy's /register page and pastes it here. No shared/demo tokens are
         # shipped; the token decides which tools are exposed (proxy filters).
+        st.markdown(
+            "Connect your lab notebook (eLabFTW) and/or the research data "
+            "repository (DataTagger) to ask the chat about your own data.\n\n"
+            "1. Open the registration page for each service and log in with "
+            "your account to get a personal token.\n"
+            "2. Paste the token below.\n\n"
+            "- [eLabFTW register](https://researchmcp.duckdns.org/el/register)\n"
+            "- [DataTagger register](https://researchmcp.duckdns.org/dt/register)"
+        )
         elab_tok = st.text_input(
-            "eLabFTW-Token (aus /el/register)", type="password",
+            "eLabFTW token", type="password",
             key="elab_token_input",
-            help="Persönliches JWT von https://researchmcp.duckdns.org/el/register",
+            placeholder="Paste token from /el/register",
         )
         if elab_tok:
             st.session_state["elab_token"] = elab_tok.strip()
@@ -412,26 +421,33 @@ with tab_chat:
             st.session_state["elab_token"] = ""
 
         dt_tok = st.text_input(
-            "DataTagger-Token (aus /dt/register)", type="password",
+            "DataTagger token", type="password",
             key="dt_token_input",
-            help="Persönliches JWT von https://researchmcp.duckdns.org/dt/register",
+            placeholder="Paste token from /dt/register",
         )
         if dt_tok:
             st.session_state["dt_token"] = dt_tok.strip()
         elif st.session_state.get("dt_token"):
             st.session_state["dt_token"] = ""
 
-        if st.button("Verbindung testen"):
+        if st.button("Connect sources", type="primary"):
             rc = openai_tools.get_remote_clients() or mcp_clients.RemoteClients()
             rc.elab_token = st.session_state.get("elab_token") or None
             rc.dt_token = st.session_state.get("dt_token") or None
             openai_tools.set_remote_clients(rc)
-            tools = rc.build_openai_tools()
-            st.caption(f"{len(tools)} Remote-Tools geladen.")
+            with st.spinner("Connecting..."):
+                tools = rc.build_openai_tools()
+            n_elab = sum(1 for t in tools if t["function"]["name"].startswith("elab_") and "unavailable" not in t["function"]["name"])
+            n_dt = sum(1 for t in tools if t["function"]["name"].startswith("dt_") and "unavailable" not in t["function"]["name"])
+            msgs = []
             if st.session_state.get("elab_token"):
-                st.caption("eLabFTW verbunden.")
+                msgs.append(f"eLabFTW: connected ({n_elab} tools)" if n_elab else "eLabFTW: token invalid or expired — please register a new one.")
             if st.session_state.get("dt_token"):
-                st.caption("DataTagger verbunden.")
+                msgs.append(f"DataTagger: connected ({n_dt} tools)" if n_dt else "DataTagger: token invalid or expired — please register a new one.")
+            if not msgs:
+                msgs.append("No tokens entered.")
+            for m in msgs:
+                st.caption(m)
 
     # Install (or refresh) the session's RemoteClients from session state.
     rc = openai_tools.get_remote_clients()

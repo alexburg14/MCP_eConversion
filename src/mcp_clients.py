@@ -131,13 +131,13 @@ def _friendly_error(exc: Exception) -> str:
     text = f"{type(exc).__name__}: {exc}"
     low = text.lower()
     if "401" in low or "unauthorized" in low:
-        return "Token ungültig oder abgelaufen — bitte unter /el/register bzw. /dt/register neu registrieren."
+        return "Token invalid or expired — please register a new one via /el/register or /dt/register."
     if "403" in low or "forbidden" in low:
-        return "Nicht berechtigt (403) — das Token erlaubt diesen Zugriff nicht."
+        return "Not authorized (403) — this token does not allow the action."
     if "404" in low or "not found" in low:
-        return "MCP-Endpunkt nicht gefunden (404)."
+        return "MCP endpoint not found (404)."
     if "timed out" in low or "timeout" in low or "connection refused" in low:
-        return "Server nicht erreichbar (Timeout/Verbindung)."
+        return "Server unreachable (timeout/connection)."
     # ExceptionGroup nests the real HTTP error in its sub-exceptions.
     # Walk the tree (unpack .exceptions recursively) and re-check.
     for sub in getattr(exc, "exceptions", []) or []:
