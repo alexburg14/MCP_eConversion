@@ -11,6 +11,21 @@ display_name = "eConversion Knowledge Assistant"
 # One clause describing the cluster, injected into the assistant's system prompt.
 description = "the e-conversion energy research cluster, a consortium of ~42 research groups at TUM, LMU, FHI, and MPI focused on energy conversion"
 website = "https://e-conversion.de"
+# Below: scraped from e-conversion.de/about + e-conversion.de on 2026-09-04. Optional —
+# leave a field empty ("" or []) if it doesn't apply to a different cluster.
+cluster_id = "EXC 2089/2 - 390776260"
+funding_body = "Deutsche Forschungsgemeinschaft (DFG) under Germany's Excellence Strategy"
+host_institutions = [
+    "Technical University of Munich (TUM)",
+    "Ludwig-Maximilians-Universität München (LMU)",
+]
+participating_institutions = [
+    "Technical University of Munich (TUM)",
+    "Ludwig-Maximilians-Universität München (LMU)",
+    "Max Planck Institute for Solid State Research",
+    "Fritz Haber Institute of the Max Planck Society",
+    "Deutsches Museum München",
+]
 
 [llm]
 # OpenAI-compatible chat endpoint. Default: GWDG SAIA / Academic Cloud.

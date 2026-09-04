@@ -10,6 +10,7 @@ Requires API_KEY in the environment or in a .env file at the repo root.
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import altair as alt
@@ -54,8 +55,24 @@ def _load_dotenv() -> None:
 
 _TOOLS = openai_tools.build_openai_tools()
 
+
+def _cluster_identity_line() -> str:
+    """One-line cluster identity (funder, ID, institutions) if configured, else empty."""
+    parts = []
+    if _CFG.cluster.cluster_id:
+        parts.append(f"Cluster ID {_CFG.cluster.cluster_id}")
+    if _CFG.cluster.funding_body:
+        parts.append(f"funded by {_CFG.cluster.funding_body}")
+    if _CFG.cluster.host_institutions:
+        parts.append("hosted at " + " and ".join(_CFG.cluster.host_institutions))
+    if not parts:
+        return ""
+    return "\n\n" + "; ".join(parts) + "."
+
+
 _BASE_SYSTEM = f"""\
-You are a research assistant for {_CFG.cluster.description}.
+You are a research assistant for {_CFG.cluster.description}.\
+{_cluster_identity_line()}
 
 You have access to a local database of {len(server.papers)} cluster publications (with \
 abstracts and some full texts) and profiles of {len(server._PIS)} PIs. Use the tools to \
@@ -96,6 +113,7 @@ Answer in the same language as the question (German or English).\
 """
 
 _PROPOSAL_SUMMARY_PATH = _REPO_ROOT / "data" / "cache" / "proposal_summary.md"
+_FEEDBACK_PATH = _REPO_ROOT / "data" / "feedback" / "feedback.jsonl"
 
 
 def _build_system_prompt() -> str:
@@ -159,6 +177,30 @@ def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list
             })
 
     return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log
+
+
+def _record_feedback(question: str, answer: str, model: str, rating: int) -> None:
+    """Append one feedback record (thumbs rating on a question/answer pair) as JSONL."""
+    _FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "question": question,
+        "answer": answer,
+        "rating": rating,  # st.feedback("thumbs"): 0 = thumbs down, 1 = thumbs up
+    }
+    with open(_FEEDBACK_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _feedback_widget(key: str, question: str, answer: str, model: str) -> None:
+    """Thumbs up/down on an assistant answer; logs the first rating given per message."""
+    if "feedback_logged" not in st.session_state:
+        st.session_state.feedback_logged = {}
+    rating = st.feedback("thumbs", key=key)
+    if rating is not None and st.session_state.feedback_logged.get(key) != rating:
+        _record_feedback(question, answer, model, rating)
+        st.session_state.feedback_logged[key] = rating
 
 
 @st.cache_data(show_spinner="Computing corpus map (UMAP + clustering)...")
@@ -231,6 +273,8 @@ with tab_chat:
     _default_idx = MODELS.index(_CFG.llm.default_model) if _CFG.llm.default_model in MODELS else 0
     model = st.sidebar.selectbox("Model", MODELS, index=_default_idx)
     st.sidebar.caption(f"Endpoint: {BASE_URL}")
+    if _CFG.cluster.cluster_id:
+        st.sidebar.caption(_CFG.cluster.cluster_id)
 
     client = OpenAI(api_key=api_key, base_url=BASE_URL)
 
@@ -239,9 +283,12 @@ with tab_chat:
         st.session_state.messages = []
 
     # Render history
-    for msg in st.session_state.messages:
+    for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if msg["role"] == "assistant" and i > 0:
+                question = st.session_state.messages[i - 1]["content"]
+                _feedback_widget(f"feedback_{i}", question, msg["content"], model)
 
     # Input
     if prompt := st.chat_input("Ask about papers, PIs, or research topics..."):
@@ -265,5 +312,6 @@ with tab_chat:
                 with st.expander("Tools used", expanded=False):
                     for tc in tool_calls:
                         st.code(tc, language=None)
+            _feedback_widget(f"feedback_{len(st.session_state.messages)}", prompt, answer, model)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})

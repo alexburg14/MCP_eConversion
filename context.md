@@ -104,6 +104,11 @@ The flat `data/` dir mixed ground-truth inputs with rebuildable outputs, so "wha
 ### 13. Made the DFG proposal's full text queryable (`get_proposal_fulltext`)
 Driven by the 2026-09-03 meeting's action item "den Antrag als Volltext in die Publikationsdaten integrieren" — until now only Section 2 (the "Summary of the Proposal") was extracted, as system-prompt context. `extract_proposal_summary.py` now also writes the whole PDF to `data/cache/proposal_fulltext.md` (~115K tokens). That's far too large to return from a single tool call, so rather than a flat dump the new `get_proposal_fulltext(query)` tool splits the document into paragraphs and returns the top 5 keyword matches, reusing the same fold/tokenize helpers as `search_pis`. Omitting `query` returns the document's char count and opening paragraphs as an overview. This is a smaller, blank-line-based match rather than the corpus's BM25 index (single document, not worth a second index) — reasonable for now but nowhere as precise as `search_papers`.
 
+### 14. Feedback button + more cluster metadata (2026-09-03 meeting: Feedback-Button, Webseite scannen)
+Two more items from the 03.09.26 meeting's owner-tagged next steps. `app.py` now shows a thumbs up/down (`st.feedback`) under every assistant answer; the first rating per message is appended as JSONL to `data/feedback/feedback.jsonl` (question, answer, model, rating) — no external service, matching the single-user setup.
+
+Separately, `config.toml`'s `[cluster]` table gained optional identity fields (`cluster_id`, `funding_body`, `host_institutions`, `participating_institutions`), scraped from e-conversion.de and e-conversion.de/about on 2026-09-04. Fields the site didn't clearly state (spokesperson, founding year, funding amount) were left out rather than guessed. `ClusterConfig` defaults them to empty so a forked `config.toml` for a different cluster still loads; when set, they're folded into the system prompt (one identity line) and shown in the sidebar.
+
 ---
 
 ## What Worked

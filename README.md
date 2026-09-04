@@ -55,6 +55,19 @@ one file; no Python changes are required. Publication and PI counts shown in the
 and system prompt are derived from the loaded caches, so they stay correct
 automatically.
 
+`[cluster]` also carries optional identity metadata (`cluster_id`, `funding_body`,
+`host_institutions`, `participating_institutions`) — for e-conversion these were
+scraped from e-conversion.de on 2026-09-04. They're injected into the system prompt
+and shown in the sidebar when set, and default to empty so a fork's `config.toml`
+doesn't need them.
+
+## Feedback
+
+The chat UI shows a thumbs up/down under each answer (`st.feedback`). Ratings are
+appended as JSONL to `data/feedback/feedback.jsonl` — question, answer, model, and
+rating, one record per line — for later review. There's no external feedback
+service wired up; this is local-only, matching the single-user setup.
+
 ## Tests
 
 ```bash
