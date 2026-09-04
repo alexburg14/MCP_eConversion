@@ -38,6 +38,31 @@ def test_to_openai_schema_handles_missing_input_schema():
     assert schema["function"]["parameters"] == {"type": "object", "properties": {}}
 
 
+# --- Auth mode --------------------------------------------------------------
+
+def test_auth_query_mode_appends_token_to_url():
+    url, headers = mcp_clients._auth("https://x/mcp", "TOK", "query")
+    assert url == "https://x/mcp?token=TOK"
+    assert headers == {}
+
+
+def test_auth_query_mode_preserves_existing_query():
+    url, headers = mcp_clients._auth("https://x/mcp?a=1", "TOK", "query")
+    assert url == "https://x/mcp?a=1&token=TOK"
+    assert headers == {}
+
+
+def test_auth_header_mode_sets_bearer():
+    url, headers = mcp_clients._auth("https://x/mcp", "TOK", "header")
+    assert url == "https://x/mcp"
+    assert headers == {"Authorization": "Bearer TOK"}
+
+
+def test_auth_modes_map():
+    assert mcp_clients.AUTH_MODES["elab"] == "query"
+    assert mcp_clients.AUTH_MODES["dt"] == "header"
+
+
 # --- Friendly errors --------------------------------------------------------
 
 class _Fake401(Exception):
@@ -80,7 +105,7 @@ def test_build_openai_tools_namespaces_and_skips_failures(monkeypatch):
         {"name": "list_items", "description": "d", "inputSchema": {"type": "object", "properties": {}}},
     ]
 
-    async def fake_fetch(url, token):
+    async def fake_fetch(url, token, mode):
         return fake_tools
 
     monkeypatch.setattr(mcp_clients, "_fetch_tools", fake_fetch)
@@ -91,7 +116,7 @@ def test_build_openai_tools_namespaces_and_skips_failures(monkeypatch):
 
 
 def test_build_openai_tools_server_error_yields_unavailable_tool(monkeypatch):
-    async def boom(url, token):
+    async def boom(url, token, mode):
         raise ExceptionGroup("eg", [_Fake401()])
 
     monkeypatch.setattr(mcp_clients, "_fetch_tools", boom)
@@ -110,22 +135,34 @@ def test_no_active_sources_yields_no_tools():
 def test_call_dispatches_to_right_server(monkeypatch):
     calls = {}
 
-    async def fake_fetch(url, token):
-        return [{"name": "get_experiment", "description": "d", "inputSchema": {"type": "object", "properties": {}}}]
-
-    def fake_call(url, token, name, arguments):
+    def fake_call(url, token, mode, name, arguments):
         calls["url"] = url
         calls["name"] = name
         calls["token"] = token
+        calls["mode"] = mode
         return json.dumps({"ok": True})
 
-    monkeypatch.setattr(mcp_clients, "_fetch_tools", fake_fetch)
     monkeypatch.setattr(mcp_clients, "_call_tool", fake_call)
     rc = mcp_clients.RemoteClients(elab_token="elab-tok", dt_token="dt-tok")
     assert rc.call("elab_get_experiment", {"id": 1}) == '{"ok": true}'
     assert calls["url"] == mcp_clients.ELAB_MCP_URL
     assert calls["token"] == "elab-tok"
     assert calls["name"] == "get_experiment"
+    assert calls["mode"] == "query"  # elab uses query auth
+
+
+def test_call_uses_header_mode_for_datatagger(monkeypatch):
+    calls = {}
+
+    def fake_call(url, token, mode, name, arguments):
+        calls.update(url=url, token=token, mode=mode, name=name)
+        return json.dumps({"ok": True})
+
+    monkeypatch.setattr(mcp_clients, "_call_tool", fake_call)
+    rc = mcp_clients.RemoteClients(dt_token="dt-tok")
+    rc.call("dt_list_projects", {})
+    assert calls["url"] == mcp_clients.DATATAGGER_MCP_URL
+    assert calls["mode"] == "header"  # dt uses header auth
 
 
 def test_call_unknown_prefix_returns_error_json():
