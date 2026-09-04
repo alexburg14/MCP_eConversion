@@ -47,7 +47,7 @@ def test_server_status_reports_all_caches():
 
 def test_cache_status_contract():
     # Structure, not presence: works whether or not a given cache is built.
-    expected = {"papers", "abstracts", "fulltext", "pis", "embeddings", "graph"}
+    expected = {"papers", "abstracts", "fulltext", "pis", "embeddings", "graph", "proposal"}
     assert set(server.CACHE_STATUS) == expected
     for entry in server.CACHE_STATUS.values():
         assert isinstance(entry["available"], bool)
