@@ -22,6 +22,7 @@ import server  # loads all caches at import time
 import corpus_map
 from config import get_config
 import openai_tools
+import mcp_clients
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CFG = get_config()
@@ -198,11 +199,45 @@ _SYSTEM = _build_system_prompt()
 _MAX_TOOL_ROUNDS = 10
 
 
+def _remote_system_note() -> str:
+    """One or two lines telling the model which live data sources are attached.
+
+    Deliberately minimal: only appended when the user has connected a remote
+    source, so the base system prompt stays untouched for everyone else.
+    """
+    rc = openai_tools.get_remote_clients()
+    if rc is None:
+        return ""
+    parts = []
+    if rc.elab_token:
+        parts.append(
+            "eLabFTW (ELN): tools prefixed elab_ read the lab notebook of the "
+            "connected account - use them for questions about experiments, "
+            "items, entries or inventory."
+        )
+    if rc.dt_token:
+        parts.append(
+            "DataTagger: tools prefixed dt_ search the research data repository "
+            "- use them for questions about datasets, versions or deposited "
+            "research data."
+        )
+    if not parts:
+        return ""
+    return (
+        "\n\nLive data sources are attached in this session; use their tools "
+        "when the question concerns them:\n- " + "\n- ".join(parts)
+    )
+
+
 def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str]]:
     """Run the tool-use loop; return (answer_text, list_of_tool_calls_summary)."""
     tool_log: list[str] = []
-    msgs = [{"role": "system", "content": _SYSTEM}] + list(messages)
-    kwargs = dict(tools=_TOOLS)
+    sys_content = _SYSTEM + _remote_system_note()
+    msgs = [{"role": "system", "content": sys_content}] + list(messages)
+    # Tools are rebuilt per call: local + (session) remote tools. A user who
+    # connects eLabFTW/DataTagger gets those tools; without a token this is
+    # exactly the local-only list from before.
+    kwargs = dict(tools=openai_tools.build_chat_tools())
     extra_body: dict | None = None
     if extra:
         # OpenRouter-specific fields (provider routing, zdr, ...) must go in
@@ -356,6 +391,78 @@ with tab_chat:
         st.stop()
 
     client = OpenAI(api_key=api_key, base_url=base_url)
+
+    # ---- Remote data sources (eLabFTW / DataTagger), optional ----------
+    # Tokens come from the user (BYOK, via the /el or /dt register pages) or
+    # from the demo presets below. They live in session state only and are
+    # passed to the *already running* MCP proxies as Bearer tokens. The tool
+    # selection itself is decided by each token (proxy filters tools/list).
+    with st.sidebar.expander("🔌 Datenquellen (eLabFTW / DataTagger)", expanded=False):
+        elab_preset = st.selectbox(
+            "eLabFTW (ELN)",
+            ["— eigenes Token —", "Demo/Test"],
+            key="elab_preset_sel",
+        )
+        if elab_preset == "— eigenes Token —":
+            elab_tok = st.text_input(
+                "eLabFTW-Token (aus /el/register)", type="password",
+                key="elab_token_input",
+                help="Persönliches JWT von https://researchmcp.duckdns.org/el/register",
+            )
+            if elab_tok:
+                st.session_state["elab_token"] = elab_tok.strip()
+        else:
+            demo_elab = os.environ.get("ELAB_DEMO_TOKEN", "")
+            if demo_elab:
+                st.session_state["elab_token"] = demo_elab.strip()
+                st.caption("Demo-Token aktiv.")
+            else:
+                st.caption("Kein Demo-Token hinterlegt (ELAB_DEMO_TOKEN).")
+
+        dt_preset = st.selectbox(
+            "DataTagger",
+            ["— eigenes Token —", "Demo/Test"],
+            key="dt_preset_sel",
+        )
+        if dt_preset == "— eigenes Token —":
+            dt_tok = st.text_input(
+                "DataTagger-Token (aus /dt/register)", type="password",
+                key="dt_token_input",
+                help="Persönliches JWT von https://researchmcp.duckdns.org/dt/register",
+            )
+            if dt_tok:
+                st.session_state["dt_token"] = dt_tok.strip()
+        else:
+            demo_dt = os.environ.get("DT_DEMO_TOKEN", "")
+            if demo_dt:
+                st.session_state["dt_token"] = demo_dt.strip()
+                st.caption("Demo-Token aktiv.")
+            else:
+                st.caption("Kein Demo-Token hinterlegt (DT_DEMO_TOKEN).")
+
+        if st.button("Verbindung testen"):
+            rc = openai_tools.get_remote_clients() or mcp_clients.RemoteClients()
+            rc.elab_token = st.session_state.get("elab_token") or None
+            rc.dt_token = st.session_state.get("dt_token") or None
+            openai_tools.set_remote_clients(rc)
+            tools = rc.build_openai_tools()
+            st.caption(f"{len(tools)} Remote-Tools geladen.")
+            if st.session_state.get("elab_token"):
+                st.caption("eLabFTW verbunden.")
+            if st.session_state.get("dt_token"):
+                st.caption("DataTagger verbunden.")
+
+    # Install (or refresh) the session's RemoteClients from session state.
+    rc = openai_tools.get_remote_clients()
+    if rc is None:
+        rc = mcp_clients.RemoteClients(
+            elab_token=st.session_state.get("elab_token") or None,
+            dt_token=st.session_state.get("dt_token") or None,
+        )
+        openai_tools.set_remote_clients(rc)
+    else:
+        rc.elab_token = st.session_state.get("elab_token") or None
+        rc.dt_token = st.session_state.get("dt_token") or None
 
     # Chat history in session state
     if "messages" not in st.session_state:
