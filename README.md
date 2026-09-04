@@ -6,7 +6,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 
 - **956 publications** scraped from `e-conversion.de/publikationen`
 - **953 abstracts (99.7% coverage)** cached locally — no API calls at search time
-- **402 full-text bodies (42.1% coverage)** cached locally, harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs, and HTML landing pages
+- **947 full-text bodies (99.1% coverage)** cached locally — 403 harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs and HTML landing pages, plus 544 supplied locally by collaborators via institutional access
 - **148 dataset links** (e.g. crystal structures in CSD/CCDC) attached to their parent papers
 - **42 PIs** scraped from `e-conversion.de/members/` with group, department, institution, research focus, application fields, and (where listed) their publication DOIs — links each PI to their papers in the cache
 - **Two-stage BM25 search** — searches titles first, falls back to abstracts when the abstract index scores higher (handles both precise and conceptual queries)
@@ -20,7 +20,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 | `search_papers(query)` | Lexical (BM25) search — top 5 papers with titles, authors, year, abstracts, and any linked datasets. Best for exact terminology, acronyms, author names. `matched_on` (`title` / `abstract`) indicates which index fired. |
 | `semantic_search_papers(query)` | Semantic (embedding) search — top 5 papers ranked by cosine similarity over BGE-small embeddings. Best for conceptual queries where wording may differ from the abstracts. |
 | `get_paper_by_doi(doi)` | Direct lookup — returns full metadata and abstract for a single paper. When OpenAlex metadata is cached, includes the full author list, journal, and citation count. |
-| `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Only available for the ~42% of papers covered by the full-text cache. |
+| `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Available for the ~99% of papers covered by the full-text cache. |
 | `get_proposal_fulltext(query)` | Keyword search over the full text of the e-conversion 2.0 DFG proposal (~115K tokens, too large to return whole) — top 5 matching paragraphs. Omit `query` for the document's char count and opening paragraphs. Covers detail beyond the Section 2 summary already in the system prompt (work packages, PI roles, objectives). |
 | `search_nomad(elements, formula, author, text)` | Live search over the **public NOMAD** materials repository — external computed/experimental data, not cluster papers. Filters combine with AND. Text queries are relevance-ranked (`_score`), structured filters newest-first. Returns `total_matches` plus a sample. |
 | `search_pis(query)` | Keyword search across PI names, groups, research focus, and application fields. Returns the top 5 matching PIs with group, institution, research focus, and publication count. |
@@ -189,7 +189,7 @@ Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes two outpu
 | `data/sources/pdfs/` | *(source)* Locally-supplied full-text PDFs (a collaborator's local full-texts), filenames encode the DOI; `_unmatched/` holds off-corpus and stub PDFs pending triage |
 | `data/cache/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
 | `data/cache/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
-| `data/cache/fulltext_cache.json` | 852 full-text bodies keyed by DOI |
+| `data/cache/fulltext_cache.json` | 947 full-text bodies keyed by DOI (pdf 730 · pmc 138 · html 79) |
 | `data/cache/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
 | `data/cache/collaboration_graph.json` | Node-link JSON of the PI co-authorship graph |
 | `data/cache/proposal_summary.md` | Section 2 of the proposal, extracted for chat-interface system context |
