@@ -179,28 +179,35 @@ def _answer(client: OpenAI, model: str, messages: list[dict]) -> tuple[str, list
     return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log
 
 
-def _record_feedback(question: str, answer: str, model: str, rating: int) -> None:
-    """Append one feedback record (thumbs rating on a question/answer pair) as JSONL."""
+def _record_feedback(question: str, answer: str, model: str, category: str, text: str) -> None:
+    """Append one feedback record (bug report or general note on a question/answer pair) as JSONL."""
     _FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "model": model,
         "question": question,
         "answer": answer,
-        "rating": rating,  # st.feedback("thumbs"): 0 = thumbs down, 1 = thumbs up
+        "category": category,
+        "text": text,
     }
     with open(_FEEDBACK_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def _feedback_widget(key: str, question: str, answer: str, model: str) -> None:
-    """Thumbs up/down on an assistant answer; logs the first rating given per message."""
-    if "feedback_logged" not in st.session_state:
-        st.session_state.feedback_logged = {}
-    rating = st.feedback("thumbs", key=key)
-    if rating is not None and st.session_state.feedback_logged.get(key) != rating:
-        _record_feedback(question, answer, model, rating)
-        st.session_state.feedback_logged[key] = rating
+    """Popover to report a bug or leave general feedback on an assistant answer."""
+    with st.popover("💬 Feedback", key=key):
+        with st.form(key=f"{key}_form", clear_on_submit=True, border=False):
+            category = st.radio(
+                "Type", ["Bug report", "General feedback"], key=f"{key}_category", horizontal=True,
+            )
+            text = st.text_area("What happened, or what would you like to see?", key=f"{key}_text")
+            if st.form_submit_button("Submit"):
+                if text.strip():
+                    _record_feedback(question, answer, model, category, text.strip())
+                    st.success("Thanks — recorded.")
+                else:
+                    st.warning("Add a note before submitting.")
 
 
 @st.cache_data(show_spinner="Computing corpus map (UMAP + clustering)...")

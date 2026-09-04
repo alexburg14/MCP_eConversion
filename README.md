@@ -63,9 +63,10 @@ doesn't need them.
 
 ## Feedback
 
-The chat UI shows a thumbs up/down under each answer (`st.feedback`). Ratings are
-appended as JSONL to `data/feedback/feedback.jsonl` — question, answer, model, and
-rating, one record per line — for later review. There's no external feedback
+The chat UI shows a "💬 Feedback" popover under each answer, for reporting a bug
+or leaving general feedback (free text, not a rating). Submissions are appended
+as JSONL to `data/feedback/feedback.jsonl` — question, answer, model, category,
+and text, one record per line — for later review. There's no external feedback
 service wired up; this is local-only, matching the single-user setup.
 
 ## Tests
