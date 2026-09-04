@@ -393,52 +393,33 @@ with tab_chat:
     client = OpenAI(api_key=api_key, base_url=base_url)
 
     # ---- Remote data sources (eLabFTW / DataTagger), optional ----------
-    # Tokens come from the user (BYOK, via the /el or /dt register pages) or
-    # from the demo presets below. They live in session state only and are
-    # passed to the *already running* MCP proxies as Bearer tokens. The tool
-    # selection itself is decided by each token (proxy filters tools/list).
+    # Tokens come from the user (BYOK, via the /el or /dt register pages).
+    # They live in session state only and are passed to the *already running*
+    # MCP proxies. The tool selection itself is decided by each token (proxy
+    # filters tools/list).
     with st.sidebar.expander("🔌 Datenquellen (eLabFTW / DataTagger)", expanded=False):
-        elab_preset = st.selectbox(
-            "eLabFTW (ELN)",
-            ["— eigenes Token —", "Demo/Test"],
-            key="elab_preset_sel",
+        # Bring-your-own-token: each user registers their personal JWT on the
+        # proxy's /register page and pastes it here. No shared/demo tokens are
+        # shipped; the token decides which tools are exposed (proxy filters).
+        elab_tok = st.text_input(
+            "eLabFTW-Token (aus /el/register)", type="password",
+            key="elab_token_input",
+            help="Persönliches JWT von https://researchmcp.duckdns.org/el/register",
         )
-        if elab_preset == "— eigenes Token —":
-            elab_tok = st.text_input(
-                "eLabFTW-Token (aus /el/register)", type="password",
-                key="elab_token_input",
-                help="Persönliches JWT von https://researchmcp.duckdns.org/el/register",
-            )
-            if elab_tok:
-                st.session_state["elab_token"] = elab_tok.strip()
-        else:
-            demo_elab = os.environ.get("ELAB_DEMO_TOKEN", "")
-            if demo_elab:
-                st.session_state["elab_token"] = demo_elab.strip()
-                st.caption("Demo-Token aktiv.")
-            else:
-                st.caption("Kein Demo-Token hinterlegt (ELAB_DEMO_TOKEN).")
+        if elab_tok:
+            st.session_state["elab_token"] = elab_tok.strip()
+        elif st.session_state.get("elab_token"):
+            st.session_state["elab_token"] = ""
 
-        dt_preset = st.selectbox(
-            "DataTagger",
-            ["— eigenes Token —", "Demo/Test"],
-            key="dt_preset_sel",
+        dt_tok = st.text_input(
+            "DataTagger-Token (aus /dt/register)", type="password",
+            key="dt_token_input",
+            help="Persönliches JWT von https://researchmcp.duckdns.org/dt/register",
         )
-        if dt_preset == "— eigenes Token —":
-            dt_tok = st.text_input(
-                "DataTagger-Token (aus /dt/register)", type="password",
-                key="dt_token_input",
-                help="Persönliches JWT von https://researchmcp.duckdns.org/dt/register",
-            )
-            if dt_tok:
-                st.session_state["dt_token"] = dt_tok.strip()
-        else:
-            demo_dt = os.environ.get("DT_DEMO_TOKEN", "")
-            if demo_dt:
-                st.session_state["dt_token"] = demo_dt.strip()
-                st.caption("Demo-Token aktiv.")
-            else:
-                st.caption("Kein Demo-Token hinterlegt (DT_DEMO_TOKEN).")
+        if dt_tok:
+            st.session_state["dt_token"] = dt_tok.strip()
+        elif st.session_state.get("dt_token"):
+            st.session_state["dt_token"] = ""
 
         if st.button("Verbindung testen"):
             rc = openai_tools.get_remote_clients() or mcp_clients.RemoteClients()
