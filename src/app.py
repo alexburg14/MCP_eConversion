@@ -349,8 +349,9 @@ _CLUSTER_PALETTE = [
 # deck.gl scatter for the corpus map, rendered in a components.html iframe.
 # Streamlit's bundled pydeck can't drive an OrthographicView (its JSON path is
 # built for geospatial views and asserts), so we load deck.gl directly and get
-# GPU-crisp points with smooth scroll-zoom / drag-pan. __DATA__ / __HL__ are
-# filled per render. Uses OrthographicView so the UMAP plane maps 1:1 to screen.
+# GPU-crisp points with smooth scroll-zoom / drag-pan. __DATA__ / __MATCHES__
+# are filled per render. Uses OrthographicView so the UMAP plane maps 1:1 to
+# screen. __MATCHES__ is the list of titles matching the search box.
 _CORPUS_MAP_TEMPLATE = """
 <style>
   html, body { margin: 0; height: 100%; background: transparent; }
@@ -367,7 +368,7 @@ _CORPUS_MAP_TEMPLATE = """
 <script src="https://cdn.jsdelivr.net/npm/deck.gl@9.0.38/dist.min.js"></script>
 <script>
   const DATA = __DATA__;
-  const HL = __HL__;
+  const MATCHES = new Set(__MATCHES__);
   const { Deck, OrthographicView, ScatterplotLayer } = deck;
   const wrap = document.getElementById("wrap");
   const xs = DATA.map(d => d.x), ys = DATA.map(d => d.y);
@@ -377,22 +378,30 @@ _CORPUS_MAP_TEMPLATE = """
   const zoom = Math.log2(0.85 * Math.min(
     W / Math.max(maxx - minx, 1e-6), H / Math.max(maxy - miny, 1e-6)));
 
-  // With a paper selected, frame its surroundings: center on it and zoom so
-  // its ~30 nearest neighbors fill the viewport (clamped so we always zoom in
-  // a little, but never absurdly far when neighbors are very close).
+  // A search rings every matching paper and frames the hits: a single hit gets
+  // its ~30-neighbor surroundings; several get a bounding-box fit. An empty
+  // search (or no matches) shows the whole corpus. All clamps keep us from
+  // zooming out past the full view or in absurdly far.
   let viewTarget = [(minx + maxx) / 2, (miny + maxy) / 2, 0];
   let viewZoom = zoom;
-  if (HL) {
-    const sel = DATA.find(d => d.title === HL);
-    if (sel) {
-      const dists = DATA
-        .map(d => Math.hypot(d.x - sel.x, d.y - sel.y))
-        .sort((a, b) => a - b);
-      const R = dists[Math.min(30, dists.length - 1)] || 1;
-      const zin = Math.log2(0.35 * Math.min(W, H) / Math.max(R, 1e-6));
-      viewTarget = [sel.x, sel.y, 0];
-      viewZoom = Math.min(Math.max(zin, zoom + 1), zoom + 5);
-    }
+  const hits = DATA.filter(d => MATCHES.has(d.title));
+  if (hits.length === 1) {
+    const sel = hits[0];
+    const dists = DATA
+      .map(d => Math.hypot(d.x - sel.x, d.y - sel.y))
+      .sort((a, b) => a - b);
+    const R = dists[Math.min(30, dists.length - 1)] || 1;
+    const zin = Math.log2(0.35 * Math.min(W, H) / Math.max(R, 1e-6));
+    viewTarget = [sel.x, sel.y, 0];
+    viewZoom = Math.min(Math.max(zin, zoom + 1), zoom + 5);
+  } else if (hits.length > 1) {
+    const hx = hits.map(d => d.x), hy = hits.map(d => d.y);
+    const nx = Math.min(...hx), Xx = Math.max(...hx);
+    const ny = Math.min(...hy), Xy = Math.max(...hy);
+    viewTarget = [(nx + Xx) / 2, (ny + Xy) / 2, 0];
+    const zfit = Math.log2(0.8 * Math.min(
+      W / Math.max(Xx - nx, 1e-6), H / Math.max(Xy - ny, 1e-6)));
+    viewZoom = Math.min(Math.max(zfit, zoom), zoom + 6);
   }
 
   function layers() {
@@ -403,9 +412,9 @@ _CORPUS_MAP_TEMPLATE = """
       opacity: 0.85, pickable: true,
       autoHighlight: true, highlightColor: [255, 255, 255, 140],
     })];
-    if (HL) {
+    if (MATCHES.size) {
       L.push(new ScatterplotLayer({
-        id: "selected", data: DATA.filter(d => d.title === HL),
+        id: "matched", data: hits,
         getPosition: d => [d.x, d.y],
         filled: false, stroked: true,
         getLineColor: [255, 255, 255],
@@ -458,11 +467,18 @@ with tab_map:
         n_clusters = st.slider("Clusters", min_value=2, max_value=20, value=8)
         df = pd.DataFrame(_build_corpus_map(n_clusters))
 
-        highlight = st.selectbox(
-            "Highlight a paper (the one you're reading)",
-            options=[""] + sorted(df["title"].tolist()),
-            format_func=lambda t: t if t else "— none —",
-        )
+        query = st.text_input(
+            "Search papers",
+            placeholder="Type a title keyword (e.g. perovskite, MXene) to ring matching papers…",
+        ).strip()
+        titles = df["title"].tolist()
+        matches = [t for t in titles if query.lower() in t.lower()] if query else []
+        if query:
+            st.caption(
+                f"{len(matches)} paper{'s' if len(matches) != 1 else ''} matching "
+                f"“{query}” ringed below."
+                if matches else f"No papers match “{query}”."
+            )
 
         # Map each keyword-labeled cluster to a palette color. deck.gl's
         # OrthographicView has y pointing down, so negate y for a conventional
@@ -480,7 +496,7 @@ with tab_map:
         html = (
             _CORPUS_MAP_TEMPLATE
             .replace("__DATA__", json.dumps(records))
-            .replace("__HL__", json.dumps(highlight or ""))
+            .replace("__MATCHES__", json.dumps(matches))
         )
         components.html(html, height=560, scrolling=False)
 
