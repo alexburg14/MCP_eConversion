@@ -13,7 +13,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -335,6 +334,87 @@ def _build_corpus_map(n_clusters: int) -> list[dict]:
     return corpus_map.build_map(server.papers_by_doi, n_clusters=n_clusters)
 
 
+# Corpus-map cluster colors: Tableau-20, saturated hues first so the common
+# small-cluster-count case gets the most distinguishable set. RGB triples.
+_CLUSTER_PALETTE = [
+    tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+    for h in (
+        "#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2",
+        "#EECA3B", "#B279A2", "#FF9DA6", "#9D755D", "#79706E",
+        "#9ECAE9", "#FFBF79", "#88D27A", "#FF9D98", "#83BCB6",
+        "#F2CF5B", "#D6A5C9", "#D67195", "#D8B5A5", "#BAB0AC",
+    )
+]
+
+# deck.gl scatter for the corpus map, rendered in a components.html iframe.
+# Streamlit's bundled pydeck can't drive an OrthographicView (its JSON path is
+# built for geospatial views and asserts), so we load deck.gl directly and get
+# GPU-crisp points with smooth scroll-zoom / drag-pan. __DATA__ / __HL__ are
+# filled per render. Uses OrthographicView so the UMAP plane maps 1:1 to screen.
+_CORPUS_MAP_TEMPLATE = """
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  #deck-canvas { width: 100%; height: 100%; }
+  .dk-tip {
+    background: #1b1e26; color: #e9ebf0;
+    font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 6px 9px; border-radius: 6px; max-width: 340px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  }
+</style>
+<div id="wrap"><canvas id="deck-canvas"></canvas></div>
+<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.0.38/dist.min.js"></script>
+<script>
+  const DATA = __DATA__;
+  const HL = __HL__;
+  const { Deck, OrthographicView, ScatterplotLayer } = deck;
+  const wrap = document.getElementById("wrap");
+  const xs = DATA.map(d => d.x), ys = DATA.map(d => d.y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs);
+  const miny = Math.min(...ys), maxy = Math.max(...ys);
+  const W = wrap.clientWidth || 700, H = wrap.clientHeight || 540;
+  const zoom = Math.log2(0.85 * Math.min(
+    W / Math.max(maxx - minx, 1e-6), H / Math.max(maxy - miny, 1e-6)));
+
+  function layers() {
+    const L = [new ScatterplotLayer({
+      id: "points", data: DATA,
+      getPosition: d => [d.x, d.y], getFillColor: d => d.color,
+      getRadius: 4, radiusUnits: "pixels", radiusMinPixels: 2.5, radiusMaxPixels: 9,
+      opacity: 0.85, pickable: true,
+      autoHighlight: true, highlightColor: [255, 255, 255, 140],
+    })];
+    if (HL) {
+      L.push(new ScatterplotLayer({
+        id: "selected", data: DATA.filter(d => d.title === HL),
+        getPosition: d => [d.x, d.y],
+        filled: false, stroked: true,
+        getLineColor: [255, 255, 255],
+        lineWidthUnits: "pixels", getLineWidth: 2,
+        lineWidthMinPixels: 2, lineWidthMaxPixels: 2,
+        getRadius: 12, radiusUnits: "pixels", radiusMinPixels: 12, radiusMaxPixels: 12,
+        pickable: false,
+      }));
+    }
+    return L;
+  }
+
+  new Deck({
+    canvas: "deck-canvas",
+    views: new OrthographicView({}),
+    controller: { scrollZoom: true, dragPan: true, doubleClickZoom: true },
+    initialViewState: { target: [(minx + maxx) / 2, (miny + maxy) / 2, 0], zoom },
+    layers: layers(),
+    getTooltip: ({ object }) => object && {
+      html: "<b>" + object.title + "</b><br/>" + object.year + " \\u00b7 " + object.cluster,
+      className: "dk-tip",
+    },
+  });
+</script>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Streamlit UI
 # ---------------------------------------------------------------------------
@@ -350,8 +430,9 @@ tab_chat, tab_map, tab_pipeline = st.tabs(["💬 Chat", "🗺️ Corpus Map", "�
 with tab_map:
     st.caption(
         "UMAP layout of the paper embeddings; KMeans clusters (computed in the "
-        "full 384-d space) labeled with their top title keywords. Hover a point "
-        "for title/year — a visual answer to 'which papers are near the one I'm reading?'"
+        "full 384-d space) labeled with their top title keywords. Scroll to zoom, "
+        "drag to pan, hover a point for its title — a visual answer to 'which "
+        "papers are near the one I'm reading?'"
     )
     if not corpus_map.is_available():
         st.info("Embeddings cache not built. Run: `python src/scripts/build_embeddings_cache.py`")
@@ -365,30 +446,40 @@ with tab_map:
             format_func=lambda t: t if t else "— none —",
         )
 
-        base = (
-            alt.Chart(df)
-            .mark_circle(size=45, opacity=0.65)
-            .encode(
-                x=alt.X("x:Q", axis=None),
-                y=alt.Y("y:Q", axis=None),
-                color=alt.Color(
-                    "cluster:N",
-                    legend=alt.Legend(title="Cluster (top title keywords)", labelLimit=280),
-                ),
-                tooltip=["title:N", "year:N", "doi:N", "cluster:N"],
-            )
+        # Map each keyword-labeled cluster to a palette color. deck.gl's
+        # OrthographicView has y pointing down, so negate y for a conventional
+        # (y-up) orientation, then hand the points to the deck.gl iframe.
+        clusters = sorted(df["cluster"].unique())
+        cmap = {c: _CLUSTER_PALETTE[i % len(_CLUSTER_PALETTE)] for i, c in enumerate(clusters)}
+        records = [
+            {
+                "x": float(row.x), "y": -float(row.y),
+                "title": row.title, "year": str(row.year),
+                "cluster": row.cluster, "color": list(cmap[row.cluster]),
+            }
+            for row in df.itertuples()
+        ]
+        html = (
+            _CORPUS_MAP_TEMPLATE
+            .replace("__DATA__", json.dumps(records))
+            .replace("__HL__", json.dumps(highlight or ""))
         )
-        if highlight:
-            # Ring around the selected paper so its neighborhood is readable at a glance.
-            marker = (
-                alt.Chart(df[df["title"] == highlight])
-                .mark_point(shape="circle", size=400, strokeWidth=3, filled=False, color="red")
-                .encode(x="x:Q", y="y:Q", tooltip=["title:N", "year:N", "doi:N"])
-            )
-            chart = (base + marker).properties(height=600).interactive()
-        else:
-            chart = base.properties(height=600).interactive()
-        st.altair_chart(chart, width="stretch")
+        components.html(html, height=560, scrolling=False)
+
+        # deck.gl has no legend of its own — render one from the same cmap.
+        swatches = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:6px;'
+            f'margin:0 16px 6px 0;font-size:12px">'
+            f'<span style="width:11px;height:11px;border-radius:3px;'
+            f'background:rgb({r},{g},{b});display:inline-block"></span>{c}</span>'
+            for c, (r, g, b) in cmap.items()
+        )
+        st.markdown(
+            '<div style="opacity:.55;font-size:11px;margin-bottom:4px">'
+            "Cluster (top title keywords)</div>"
+            f'<div style="display:flex;flex-wrap:wrap">{swatches}</div>',
+            unsafe_allow_html=True,
+        )
 
 # Pipeline map: a static, self-contained HTML lineage diagram of the whole
 # sources → build → caches → tools → registry → delivery pipeline. Rendered in
