@@ -377,6 +377,24 @@ _CORPUS_MAP_TEMPLATE = """
   const zoom = Math.log2(0.85 * Math.min(
     W / Math.max(maxx - minx, 1e-6), H / Math.max(maxy - miny, 1e-6)));
 
+  // With a paper selected, frame its surroundings: center on it and zoom so
+  // its ~30 nearest neighbors fill the viewport (clamped so we always zoom in
+  // a little, but never absurdly far when neighbors are very close).
+  let viewTarget = [(minx + maxx) / 2, (miny + maxy) / 2, 0];
+  let viewZoom = zoom;
+  if (HL) {
+    const sel = DATA.find(d => d.title === HL);
+    if (sel) {
+      const dists = DATA
+        .map(d => Math.hypot(d.x - sel.x, d.y - sel.y))
+        .sort((a, b) => a - b);
+      const R = dists[Math.min(30, dists.length - 1)] || 1;
+      const zin = Math.log2(0.35 * Math.min(W, H) / Math.max(R, 1e-6));
+      viewTarget = [sel.x, sel.y, 0];
+      viewZoom = Math.min(Math.max(zin, zoom + 1), zoom + 5);
+    }
+  }
+
   function layers() {
     const L = [new ScatterplotLayer({
       id: "points", data: DATA,
@@ -404,7 +422,7 @@ _CORPUS_MAP_TEMPLATE = """
     canvas: "deck-canvas",
     views: new OrthographicView({}),
     controller: { scrollZoom: true, dragPan: true, doubleClickZoom: true },
-    initialViewState: { target: [(minx + maxx) / 2, (miny + maxy) / 2, 0], zoom },
+    initialViewState: { target: viewTarget, zoom: viewZoom },
     layers: layers(),
     getTooltip: ({ object }) => object && {
       html: "<b>" + object.title + "</b><br/>" + object.year + " \\u00b7 " + object.cluster,
