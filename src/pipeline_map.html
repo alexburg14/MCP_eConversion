@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eConversion Pipeline Map</title>
+<style>
+  :root {
+    --ground: #F1F2F5;
+    --panel: #FFFFFF;
+    --panel-2: #F7F8FA;
+    --ink: #171A21;
+    --ink-2: #39404E;
+    --muted: #5C6474;
+    --faint: #8C94A3;
+    --line: #DDE0E7;
+    --line-2: #C6CAD4;
+
+    /* Stage ramp, ordered short wavelength to long — the cluster's own physics. */
+    --src: #5566CE;
+    --build: #1E8E82;
+    --cache: #B47B22;
+    --tool: #BB5142;
+    --reg: #7A5CC0;
+    --deliver: #6E7684;
+
+    --src-soft: #EAECFA;
+    --build-soft: #E2F2F0;
+    --cache-soft: #F7EEDC;
+    --tool-soft: #F9E9E6;
+    --reg-soft: #EFEAF8;
+    --deliver-soft: #EDEFF2;
+
+    --focus: #5566CE;
+    --shadow: 0 1px 2px rgba(23,26,33,.05), 0 8px 24px -12px rgba(23,26,33,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #111319;
+      --panel: #191C23;
+      --panel-2: #1F232B;
+      --ink: #E9EBF0;
+      --ink-2: #C3C8D2;
+      --muted: #99A1B0;
+      --faint: #737B8A;
+      --line: #2A2F39;
+      --line-2: #3A4150;
+
+      --src: #7E8CE8;
+      --build: #3FB6A8;
+      --cache: #D9A24F;
+      --tool: #DE7A67;
+      --reg: #A78BE0;
+      --deliver: #969EAC;
+
+      --src-soft: #1E2340;
+      --build-soft: #12312E;
+      --cache-soft: #342914;
+      --tool-soft: #34201C;
+      --reg-soft: #241D36;
+      --deliver-soft: #232830;
+
+      --focus: #7E8CE8;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.6);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 400 14px/1.5 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { padding: 16px 18px 22px; max-width: 1280px; margin: 0 auto; }
+
+  header.top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 4px; }
+  header.top h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  header.top .sub { color: var(--muted); font-size: 12.5px; }
+  header.top .reset {
+    margin-left: auto; border: 1px solid var(--line-2); background: var(--panel);
+    color: var(--ink-2); font: inherit; font-size: 12.5px; padding: 4px 11px;
+    border-radius: 7px; cursor: pointer; opacity: .55; pointer-events: none; transition: opacity .15s;
+  }
+  header.top .reset.on { opacity: 1; pointer-events: auto; }
+  header.top .reset:hover { border-color: var(--focus); color: var(--focus); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 14px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  .lanes { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+  .lane { flex: 1 0 176px; min-width: 176px; }
+  .lane > .head {
+    font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); padding: 0 2px 8px; display: flex; align-items: center; gap: 7px;
+  }
+  .lane > .head b { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .lane .stack { display: flex; flex-direction: column; gap: 8px; }
+  .grouplabel { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); padding: 6px 2px 1px; }
+
+  .node {
+    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--stage, var(--line-2));
+    border-radius: 8px; padding: 8px 10px; cursor: pointer; box-shadow: var(--shadow);
+    transition: transform .12s, box-shadow .12s, opacity .18s, border-color .12s;
+  }
+  .node:hover { transform: translateY(-1px); }
+  .node .n { font-size: 12.5px; font-weight: 500; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; word-break: break-word; }
+  .node .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* highlight states */
+  .lanes.filtering .node { opacity: .28; }
+  .lanes.filtering .node.lit { opacity: 1; }
+  .lanes.filtering .node.focus { opacity: 1; box-shadow: 0 0 0 2px var(--focus), var(--shadow); }
+  .lanes.filtering .grouplabel { opacity: .4; }
+
+  /* detail */
+  .detail { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); min-height: 92px; }
+  .detail .dhead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .detail .chip { font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; color: #fff; }
+  .detail .dname { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; font-size: 14px; }
+  .detail .ddesc { color: var(--ink-2); margin: 9px 0 0; font-size: 13px; }
+  .detail .flow { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 11px; }
+  .detail .flow > div { flex: 1 1 220px; min-width: 200px; }
+  .detail .flow h4 { margin: 0 0 5px; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .detail .flow ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+  .detail .flow li { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--ink-2); }
+  .detail .flow li::before { content: "→ "; color: var(--faint); }
+  .detail .none { color: var(--faint); font-style: italic; font-size: 12px; font-family: inherit; }
+  .detail .intro { color: var(--muted); font-size: 13px; }
+  .detail .intro b { color: var(--ink-2); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>⚡ eConversion Pipeline Map</h1>
+    <span class="sub">sources → build → caches → tools → registry → delivery · click any node to trace its lineage</span>
+    <button class="reset" id="reset">Show whole pipeline</button>
+  </header>
+
+  <div class="legend" id="legend"></div>
+  <div class="lanes" id="lanes"></div>
+
+  <div class="detail" id="detail">
+    <div class="intro">
+      An interactive lineage map of the eConversion knowledge assistant. Six stages, left to right:
+      raw <b>sources</b> are turned by <b>build scripts</b> into local <b>caches</b>, which back the MCP
+      <b>tools</b> the agent calls; a single <b>registry</b> (the FastMCP server) exposes those tools to both
+      the <b>delivery</b> surfaces — the stdio MCP server and the Streamlit app. Click any node to isolate
+      what feeds it and what it feeds.
+    </div>
+  </div>
+</div>
+
+<script>
+const STAGES = {
+  sources:  {label: "Sources",   color: "var(--src)"},
+  build:    {label: "Build",     color: "var(--build)"},
+  cache:    {label: "Caches",    color: "var(--cache)"},
+  tools:    {label: "Tools",     color: "var(--tool)"},
+  registry: {label: "Registry",  color: "var(--reg)"},
+  delivery: {label: "Delivery",  color: "var(--deliver)"},
+};
+
+// node: id, lane, group?, n(ame), s(ub), d(escription)
+const NODES = [
+  // ---- sources
+  {id:"csv", lane:"sources", n:"data_publication_dois.csv", s:"956 pubs · 148 datasets", d:"Scraped from e-conversion.de/publikationen. The BM25 corpus foundation — the server refuses to start without it."},
+  {id:"enl", lane:"sources", n:"e-conversion-Converted.enl", s:"EndNote · ~1,584 recs", d:"Supplied EndNote library (SQLite). Primary abstract source; 905 records overlap the corpus."},
+  {id:"scraper", lane:"sources", n:"scraper_cache.json", s:"raw scrape", d:"Raw e-conversion.de scraper output that the DOI list was derived from."},
+  {id:"proposal", lane:"sources", n:"EXC_2089…Proposal.pdf", s:"DFG proposal · ~115K tok", d:"The e-conversion 2.0 DFG proposal PDF."},
+  {id:"pdfs", lane:"sources", n:"sources/pdfs/", s:"549 collaborator PDFs", d:"Full-text PDFs supplied by a collaborator via institutional access, covering paywalled DOIs the network pipeline can't reach."},
+  {id:"members", lane:"sources", n:"e-conversion.de/members", s:"live scrape", d:"PI staff pages, scraped to build the PI cache."},
+  {id:"nomad", lane:"sources", n:"NOMAD API", s:"live · uncached", d:"Public NOMAD materials database. Queried live at call time — no local cache."},
+
+  // ---- build
+  {id:"b_abstracts", lane:"build", n:"build_abstracts_cache.py", s:"CSV+ENL+OpenAlex+S2", d:"Merges corpus DOIs with EndNote, OpenAlex and Semantic Scholar metadata into the abstracts cache."},
+  {id:"b_embed", lane:"build", n:"build_embeddings_cache.py", s:"abstracts → 384-d", d:"Embeds each abstract with BGE-small into a 384-d vector array."},
+  {id:"b_fulltext", lane:"build", n:"build_fulltext_cache.py", s:"Unpaywall/PMC/arXiv", d:"Per-DOI network pipeline: arXiv → PMC (JATS) → repos → publisher PDFs → HTML. Incremental & resumable."},
+  {id:"b_ingest", lane:"build", n:"ingest_local_pdfs.py", s:"pdfs/ → fulltext", d:"Merges collaborator PDFs into the full-text cache (source_origin=collaborator); never overwrites network hits."},
+  {id:"b_pis", lane:"build", n:"build_pis_cache.py", s:"members scrape", d:"Scrapes the members site + per-PI pages into the PI cache."},
+  {id:"b_graph", lane:"build", n:"build_graph_cache.py", s:"pis → co-authorship", d:"Builds the PI co-authorship graph from shared publication DOIs (networkx node-link)."},
+  {id:"b_proposal", lane:"build", n:"extract_proposal_summary.py", s:"proposal → md", d:"Extracts the proposal's Section 2 summary and the whole-document full text as markdown."},
+
+  // ---- caches
+  {id:"c_abstracts", lane:"cache", n:"abstracts_cache.json", s:"~953 abstracts", d:"One entry per DOI: abstract + OpenAlex authors, journal, citation count."},
+  {id:"c_embed", lane:"cache", n:"embeddings_cache.npz", s:"~956 × 384-d", d:"BGE-small vectors + a parallel DOI array. Backs semantic search and the corpus map."},
+  {id:"c_fulltext", lane:"cache", n:"fulltext_cache.json", s:"947 full texts", d:"Full-text bodies keyed by lowercase DOI — network hits plus 544 locally-supplied PDFs (99% coverage)."},
+  {id:"c_pis", lane:"cache", n:"pis_cache.json", s:"42 PIs", d:"PI profiles: group, department, institution, research focus, and linked publication DOIs."},
+  {id:"c_graph", lane:"cache", n:"collaboration_graph.json", s:"co-authorship", d:"PI co-authorship graph (~42 nodes), node-link JSON."},
+  {id:"c_propsum", lane:"cache", n:"proposal_summary.md", s:"§2 · ~1.5K tok", d:"Proposal Section 2 — injected into the chat system prompt."},
+  {id:"c_propfull", lane:"cache", n:"proposal_fulltext.md", s:"whole · ~115K tok", d:"Whole proposal as markdown; served on demand by get_proposal_fulltext."},
+
+  // ---- tools (local)
+  {id:"t_search", lane:"tools", group:"Search", n:"search_papers", s:"BM25 lexical", d:"Two-stage BM25 search (titles, then abstracts). Best for exact terminology, acronyms, author names."},
+  {id:"t_semantic", lane:"tools", group:"Search", n:"semantic_search_papers", s:"BGE cosine", d:"Embedding search over BGE-small vectors. Best for conceptual queries."},
+  {id:"t_similar", lane:"tools", group:"Search", n:"get_similar_papers", s:"nearest to a DOI", d:"Nearest papers to a given DOI's own embedding."},
+  {id:"t_bydoi", lane:"tools", group:"Papers", n:"get_paper_by_doi", s:"single lookup", d:"Full metadata + abstract for one DOI."},
+  {id:"t_fulltext", lane:"tools", group:"Papers", n:"get_paper_fulltext", s:"cached body", d:"Cached full-text markdown for one DOI."},
+  {id:"t_list", lane:"tools", group:"Papers", n:"list_papers", s:"filter (AND)", d:"Exhaustive metadata filter by author/year/journal, newest-first."},
+  {id:"t_propfull", lane:"tools", group:"Proposal", n:"get_proposal_fulltext", s:"keyword search", d:"Keyword search over proposal paragraphs, top 5."},
+  {id:"t_searchpis", lane:"tools", group:"People", n:"search_pis", s:"PI keyword", d:"Keyword search over PIs, top 5."},
+  {id:"t_getpi", lane:"tools", group:"People", n:"get_pi", s:"PI profile", d:"Full PI profile + up to 10 linked papers."},
+  {id:"t_collab", lane:"tools", group:"Collaboration", n:"get_collaborators", s:"shared pubs", d:"PIs sharing ≥1 publication, most-shared first."},
+  {id:"t_joint", lane:"tools", group:"Collaboration", n:"joint_papers", s:"pair → DOIs", d:"DOIs co-authored by two named PIs."},
+  {id:"t_centrality", lane:"tools", group:"Collaboration", n:"collaboration_centrality", s:"betweenness", d:"PIs ranked by betweenness centrality in the co-authorship graph."},
+  {id:"t_communities", lane:"tools", group:"Collaboration", n:"collaboration_communities", s:"modularity", d:"Greedy-modularity PI communities."},
+  {id:"t_nomad", lane:"tools", group:"Materials", n:"search_nomad", s:"live external", d:"Live public NOMAD materials search — elements/formula/author/text."},
+  {id:"t_status", lane:"tools", group:"Ops", n:"server_status", s:"reads all caches", d:"Health check: cluster, tool count, LLM endpoint, and per-cache availability / size / mtime."},
+  // ---- tools (remote, BYOK)
+  {id:"t_elab", lane:"tools", group:"Remote (BYOK)", n:"elab_*", s:"eLabFTW ELN", d:"eLabFTW lab-notebook tools, fetched dynamically per session from the researchmcp proxy (query-token auth). Chat-only; not in the MCP server."},
+  {id:"t_dt", lane:"tools", group:"Remote (BYOK)", n:"dt_*", s:"DataTagger", d:"DataTagger repository tools, fetched dynamically per session (bearer-token auth). Chat-only; not in the MCP server."},
+
+  // ---- registry
+  {id:"reg", lane:"registry", n:"FastMCP  mcp  +  openai_tools", s:"single source of truth", d:"Local tools are defined with @mcp.tool() in server.py. The openai_tools bridge derives OpenAI schemas straight from that registry, so the MCP server and the chat app can never drift out of sync."},
+
+  // ---- delivery
+  {id:"d_mcp", lane:"delivery", n:"MCP server (stdio)", s:".mcp.json · econversion", d:"python src/server.py — the 15 local tools exposed over stdio to Claude and other MCP clients."},
+  {id:"d_app", lane:"delivery", n:"Streamlit app", s:"Chat · Corpus Map", d:"src/app.py — chat tool-use loop (≤10 rounds), the corpus-map tab, and this pipeline map."},
+  {id:"d_llm", lane:"delivery", n:"Multi-provider LLM", s:"gwdg · openrouter", d:"Sidebar provider select. OpenRouter auto-picks the cheapest guardrail-passing, tool-calling model under 1 €/Mtok; GWDG uses a static default."},
+  {id:"d_panel", lane:"delivery", n:"Data-source panel", s:"BYOK eLab/DataTagger", d:"Sidebar expander where a user pastes their personal eLabFTW / DataTagger tokens to attach their own lab data to the chat."},
+  {id:"d_feedback", lane:"delivery", n:"Feedback form", s:"JSONL log", d:"Per-answer bug-report / general-feedback popover, appended to data/feedback/feedback.jsonl. Local only."},
+];
+
+// directed edges [from, to]
+const EDGES = [
+  // sources → build
+  ["scraper","csv"],
+  ["csv","b_abstracts"], ["csv","b_fulltext"],
+  ["enl","b_abstracts"],
+  ["pdfs","b_ingest"],
+  ["members","b_pis"],
+  ["proposal","b_proposal"],
+  // build → cache
+  ["b_abstracts","c_abstracts"],
+  ["b_embed","c_embed"],
+  ["b_fulltext","c_fulltext"], ["b_ingest","c_fulltext"],
+  ["b_pis","c_pis"],
+  ["b_graph","c_graph"],
+  ["b_proposal","c_propsum"], ["b_proposal","c_propfull"],
+  // cache → build (derived)
+  ["c_abstracts","b_embed"], ["c_pis","b_graph"],
+  // cache/source → tools
+  ["csv","t_search"], ["csv","t_bydoi"], ["csv","t_list"],
+  ["c_abstracts","t_search"], ["c_abstracts","t_semantic"], ["c_abstracts","t_bydoi"], ["c_abstracts","t_list"], ["c_abstracts","t_getpi"],
+  ["c_embed","t_semantic"], ["c_embed","t_similar"],
+  ["c_fulltext","t_fulltext"],
+  ["c_propfull","t_propfull"],
+  ["c_pis","t_searchpis"], ["c_pis","t_getpi"],
+  ["c_graph","t_collab"], ["c_graph","t_joint"], ["c_graph","t_centrality"], ["c_graph","t_communities"],
+  ["nomad","t_nomad"],
+  // corpus map reads embeddings directly
+  ["c_embed","d_app"],
+  // local tools → registry
+  ["t_search","reg"], ["t_semantic","reg"], ["t_similar","reg"], ["t_bydoi","reg"], ["t_fulltext","reg"],
+  ["t_list","reg"], ["t_propfull","reg"], ["t_searchpis","reg"], ["t_getpi","reg"], ["t_collab","reg"],
+  ["t_joint","reg"], ["t_centrality","reg"], ["t_communities","reg"], ["t_nomad","reg"], ["t_status","reg"],
+  // registry → delivery
+  ["reg","d_mcp"], ["reg","d_app"],
+  // remote tools via panel → chat
+  ["d_panel","t_elab"], ["d_panel","t_dt"], ["t_elab","d_app"], ["t_dt","d_app"],
+  // delivery internal
+  ["d_llm","d_app"], ["d_app","d_feedback"],
+];
+
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+const parents = {}, children = {};
+NODES.forEach(n => { parents[n.id] = []; children[n.id] = []; });
+EDGES.forEach(([a,b]) => { children[a].push(b); parents[b].push(a); });
+
+function lineage(id) {
+  const set = new Set([id]);
+  const up = [id]; while (up.length) { const x = up.pop(); parents[x].forEach(p => { if (!set.has(p)) { set.add(p); up.push(p); } }); }
+  const down = [id]; while (down.length) { const x = down.pop(); children[x].forEach(c => { if (!set.has(c)) { set.add(c); down.push(c); } }); }
+  return set;
+}
+
+// ---- render legend
+document.getElementById("legend").innerHTML = Object.entries(STAGES)
+  .map(([k,v]) => `<span><i style="background:${v.color}"></i>${v.label}</span>`).join("");
+
+// ---- render lanes
+const lanesEl = document.getElementById("lanes");
+for (const [laneKey, meta] of Object.entries(STAGES)) {
+  const lane = document.createElement("div");
+  lane.className = "lane";
+  lane.innerHTML = `<div class="head"><b style="background:${meta.color}"></b>${meta.label}</div>`;
+  const stack = document.createElement("div"); stack.className = "stack";
+  let lastGroup = null;
+  NODES.filter(n => n.lane === laneKey).forEach(n => {
+    if (n.group && n.group !== lastGroup) {
+      const gl = document.createElement("div"); gl.className = "grouplabel"; gl.textContent = n.group;
+      stack.appendChild(gl); lastGroup = n.group;
+    }
+    const card = document.createElement("div");
+    card.className = "node"; card.dataset.id = n.id;
+    card.style.setProperty("--stage", meta.color);
+    card.innerHTML = `<div class="n">${n.n}</div><div class="s">${n.s}</div>`;
+    card.addEventListener("click", () => select(n.id));
+    stack.appendChild(card);
+  });
+  lane.appendChild(stack);
+  lanesEl.appendChild(lane);
+}
+
+const detailEl = document.getElementById("detail");
+const resetBtn = document.getElementById("reset");
+const INTRO = detailEl.innerHTML;
+let current = null;
+
+function laneColor(id) { return STAGES[byId[id].lane].color; }
+
+function select(id) {
+  if (current === id) { clearSel(); return; }
+  current = id;
+  const lit = lineage(id);
+  lanesEl.classList.add("filtering");
+  document.querySelectorAll(".node").forEach(el => {
+    const nid = el.dataset.id;
+    el.classList.toggle("lit", lit.has(nid));
+    el.classList.toggle("focus", nid === id);
+  });
+  resetBtn.classList.add("on");
+  renderDetail(id);
+}
+
+function clearSel() {
+  current = null;
+  lanesEl.classList.remove("filtering");
+  document.querySelectorAll(".node").forEach(el => el.classList.remove("lit","focus"));
+  resetBtn.classList.remove("on");
+  detailEl.innerHTML = INTRO;
+}
+
+function renderDetail(id) {
+  const n = byId[id];
+  const color = laneColor(id);
+  const mk = (ids) => ids.length
+    ? `<ul>${ids.map(x => `<li>${byId[x].n}</li>`).join("")}</ul>`
+    : `<span class="none">—</span>`;
+  detailEl.innerHTML = `
+    <div class="dhead">
+      <span class="chip" style="background:${color}">${STAGES[n.lane].label}</span>
+      <span class="dname">${n.n}</span>
+      <span style="color:var(--faint);font-size:12px">${n.s}</span>
+    </div>
+    <p class="ddesc">${n.d}</p>
+    <div class="flow">
+      <div><h4>Feeds from</h4>${mk(parents[id])}</div>
+      <div><h4>Feeds into</h4>${mk(children[id])}</div>
+    </div>`;
+}
+
+resetBtn.addEventListener("click", clearSel);
+document.addEventListener("keydown", e => { if (e.key === "Escape") clearSel(); });
+</script>
+</body>
+</html>

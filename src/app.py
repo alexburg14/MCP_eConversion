@@ -16,6 +16,7 @@ from pathlib import Path
 import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -29,11 +30,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CFG = get_config()
 
 BASE_URL = _CFG.llm.base_url
-
-# Tool calling verified against the live endpoint on 2026-06-12; the meeting
-# goal "mit welchen Modellen gut? Schlecht?" wants side-by-side comparison,
-# so the model is a sidebar choice rather than a constant.
-MODELS = list(_CFG.llm.models)
 
 # OpenRouter: dynamically fetch models that satisfy the account's guardrails
 # and cost under 1 EUR / M tokens (prompt AND completion). Falls back to the
@@ -347,7 +343,7 @@ st.set_page_config(page_title=_CFG.cluster.display_name, page_icon="⚡", layout
 st.title(f"⚡ {_CFG.cluster.display_name}")
 st.caption(f"{len(server.papers)} publications · {len(server._PIS)} PIs")
 
-tab_chat, tab_map = st.tabs(["💬 Chat", "🗺️ Corpus Map"])
+tab_chat, tab_map, tab_pipeline = st.tabs(["💬 Chat", "🗺️ Corpus Map", "🔧 Pipeline"])
 
 # Corpus map only needs the embeddings cache, not the API key — render it
 # before the chat tab's st.stop() so a missing key doesn't hide it too.
@@ -393,6 +389,14 @@ with tab_map:
         else:
             chart = base.properties(height=600).interactive()
         st.altair_chart(chart, width="stretch")
+
+# Pipeline map: a static, self-contained HTML lineage diagram of the whole
+# sources → build → caches → tools → registry → delivery pipeline. Rendered in
+# an iframe so its own click-to-trace interactivity works independently of
+# Streamlit; no API key needed, so render it before the chat tab's st.stop().
+with tab_pipeline:
+    _pipeline_html = (Path(__file__).parent / "pipeline_map.html").read_text(encoding="utf-8")
+    components.html(_pipeline_html, height=920, scrolling=True)
 
 with tab_chat:
     _load_dotenv()
