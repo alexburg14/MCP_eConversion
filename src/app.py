@@ -521,7 +521,7 @@ with tab_map:
 # Streamlit; no API key needed, so render it before the chat tab's st.stop().
 with tab_pipeline:
     _pipeline_html = (Path(__file__).parent / "pipeline_map.html").read_text(encoding="utf-8")
-    components.html(_pipeline_html, height=920, scrolling=True)
+    components.html(_pipeline_html, height=1980, scrolling=True)
 
 with tab_chat:
     _load_dotenv()

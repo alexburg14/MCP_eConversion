@@ -16,7 +16,6 @@
     --line: #DDE0E7;
     --line-2: #C6CAD4;
 
-    /* Stage ramp, ordered short wavelength to long — the cluster's own physics. */
     --src: #5566CE;
     --build: #1E8E82;
     --cache: #B47B22;
@@ -24,14 +23,6 @@
     --reg: #7A5CC0;
     --deliver: #6E7684;
 
-    --src-soft: #EAECFA;
-    --build-soft: #E2F2F0;
-    --cache-soft: #F7EEDC;
-    --tool-soft: #F9E9E6;
-    --reg-soft: #EFEAF8;
-    --deliver-soft: #EDEFF2;
-
-    --focus: #5566CE;
     --shadow: 0 1px 2px rgba(23,26,33,.05), 0 8px 24px -12px rgba(23,26,33,.18);
   }
   @media (prefers-color-scheme: dark) {
@@ -53,82 +44,91 @@
       --reg: #A78BE0;
       --deliver: #969EAC;
 
-      --src-soft: #1E2340;
-      --build-soft: #12312E;
-      --cache-soft: #342914;
-      --tool-soft: #34201C;
-      --reg-soft: #241D36;
-      --deliver-soft: #232830;
-
-      --focus: #7E8CE8;
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.6);
     }
   }
 
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    background: var(--ground);
-    color: var(--ink);
+    margin: 0; background: var(--ground); color: var(--ink);
     font: 400 14px/1.5 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { padding: 16px 18px 22px; max-width: 1280px; margin: 0 auto; }
+  .wrap { padding: 14px 16px 20px; max-width: 900px; margin: 0 auto; }
 
-  header.top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 4px; }
-  header.top h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
-  header.top .sub { color: var(--muted); font-size: 12.5px; }
+  header.top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+  header.top h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  header.top .sub { color: var(--muted); font-size: 12px; }
   header.top .reset {
     margin-left: auto; border: 1px solid var(--line-2); background: var(--panel);
-    color: var(--ink-2); font: inherit; font-size: 12.5px; padding: 4px 11px;
-    border-radius: 7px; cursor: pointer; opacity: .55; pointer-events: none; transition: opacity .15s;
+    color: var(--ink-2); font: inherit; font-size: 12px; padding: 4px 11px;
+    border-radius: 7px; cursor: pointer; opacity: .5; pointer-events: none; transition: opacity .15s;
   }
   header.top .reset.on { opacity: 1; pointer-events: auto; }
-  header.top .reset:hover { border-color: var(--focus); color: var(--focus); }
+  header.top .reset:hover { border-color: var(--src); color: var(--src); }
 
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 14px; font-size: 12px; color: var(--muted); }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 5px 13px; margin: 9px 0 12px; font-size: 11.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
 
-  .lanes { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
-  .lane { flex: 1 0 176px; min-width: 176px; }
-  .lane > .head {
-    font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-    color: var(--muted); padding: 0 2px 8px; display: flex; align-items: center; gap: 7px;
+  /* board holds the bands and, behind them, the SVG wire overlay */
+  #board { position: relative; }
+  #wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+
+  .band {
+    position: relative; z-index: 1; background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--stage); border-radius: 10px; padding: 9px 12px 11px;
+    box-shadow: var(--shadow);
   }
-  .lane > .head b { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-  .lane .stack { display: flex; flex-direction: column; gap: 8px; }
-  .grouplabel { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); padding: 6px 2px 1px; }
+  .band .bhead {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  .band .bhead b { width: 9px; height: 9px; border-radius: 2px; background: var(--stage); display: inline-block; }
+  .band .bhead .count { margin-left: auto; color: var(--faint); font-weight: 500; letter-spacing: 0; text-transform: none; }
+  .band .body { display: flex; flex-wrap: wrap; gap: 7px; }
+  .grouplabel { flex-basis: 100%; font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin: 3px 0 -2px; }
 
   .node {
-    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--stage, var(--line-2));
-    border-radius: 8px; padding: 8px 10px; cursor: pointer; box-shadow: var(--shadow);
+    position: relative; z-index: 1; background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 9px; cursor: pointer; min-width: 128px;
     transition: transform .12s, box-shadow .12s, opacity .18s, border-color .12s;
   }
-  .node:hover { transform: translateY(-1px); }
-  .node .n { font-size: 12.5px; font-weight: 500; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; word-break: break-word; }
-  .node .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .node:hover { transform: translateY(-1px); border-color: var(--stage); }
+  .node .n { font-size: 12px; font-weight: 500; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; word-break: break-word; line-height: 1.3; }
+  .node .s { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+
+  /* flow connector between bands (baseline pipeline direction) */
+  .flow { display: flex; justify-content: center; height: 26px; }
+  .flow svg { height: 26px; width: 26px; overflow: visible; }
+  .flow .stem { stroke: var(--line-2); stroke-width: 2; stroke-dasharray: 3 4; stroke-linecap: round; animation: flow 0.9s linear infinite; }
+  .flow .tip { fill: var(--line-2); }
+  @keyframes flow { to { stroke-dashoffset: -7; } }
 
   /* highlight states */
-  .lanes.filtering .node { opacity: .28; }
-  .lanes.filtering .node.lit { opacity: 1; }
-  .lanes.filtering .node.focus { opacity: 1; box-shadow: 0 0 0 2px var(--focus), var(--shadow); }
-  .lanes.filtering .grouplabel { opacity: .4; }
+  #board.filtering .node { opacity: .26; }
+  #board.filtering .node.lit { opacity: 1; }
+  #board.filtering .node.focus { opacity: 1; box-shadow: 0 0 0 2px var(--stage), var(--shadow); border-color: var(--stage); }
+  #board.filtering .band { opacity: .96; }
+  #board.filtering .flow { opacity: .15; }
+
+  .wire { fill: none; stroke-width: 1.9; opacity: .95; }
+  .wire-head { stroke: none; }
 
   /* detail */
-  .detail { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); min-height: 92px; }
+  .detail { margin-top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; box-shadow: var(--shadow); }
   .detail .dhead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-  .detail .chip { font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; color: #fff; }
-  .detail .dname { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; font-size: 14px; }
-  .detail .ddesc { color: var(--ink-2); margin: 9px 0 0; font-size: 13px; }
-  .detail .flow { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 11px; }
-  .detail .flow > div { flex: 1 1 220px; min-width: 200px; }
-  .detail .flow h4 { margin: 0 0 5px; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
-  .detail .flow ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
-  .detail .flow li { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--ink-2); }
-  .detail .flow li::before { content: "→ "; color: var(--faint); }
-  .detail .none { color: var(--faint); font-style: italic; font-size: 12px; font-family: inherit; }
-  .detail .intro { color: var(--muted); font-size: 13px; }
+  .detail .chip { font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; color: #fff; }
+  .detail .dname { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; font-size: 13.5px; }
+  .detail .ddesc { color: var(--ink-2); margin: 8px 0 0; font-size: 12.5px; }
+  .detail .flowcols { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 10px; }
+  .detail .flowcols > div { flex: 1 1 200px; min-width: 180px; }
+  .detail .flowcols h4 { margin: 0 0 5px; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .detail .flowcols ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+  .detail .flowcols li { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--ink-2); }
+  .detail .flowcols li::before { content: "→ "; color: var(--faint); }
+  .detail .none { color: var(--faint); font-style: italic; font-size: 11.5px; font-family: inherit; }
+  .detail .intro { color: var(--muted); font-size: 12.5px; }
   .detail .intro b { color: var(--ink-2); font-weight: 600; }
 </style>
 </head>
@@ -136,20 +136,20 @@
 <div class="wrap">
   <header class="top">
     <h1>⚡ eConversion Pipeline Map</h1>
-    <span class="sub">sources → build → caches → tools → registry → delivery · click any node to trace its lineage</span>
+    <span class="sub">sources → build → caches → tools → registry → delivery</span>
     <button class="reset" id="reset">Show whole pipeline</button>
   </header>
 
   <div class="legend" id="legend"></div>
-  <div class="lanes" id="lanes"></div>
+  <div id="board"><svg id="wires"></svg></div>
 
   <div class="detail" id="detail">
     <div class="intro">
-      An interactive lineage map of the eConversion knowledge assistant. Six stages, left to right:
-      raw <b>sources</b> are turned by <b>build scripts</b> into local <b>caches</b>, which back the MCP
-      <b>tools</b> the agent calls; a single <b>registry</b> (the FastMCP server) exposes those tools to both
-      the <b>delivery</b> surfaces — the stdio MCP server and the Streamlit app. Click any node to isolate
-      what feeds it and what it feeds.
+      An interactive lineage map of the eConversion knowledge assistant. Raw
+      <b>sources</b> are turned by <b>build scripts</b> into local <b>caches</b>, which back the MCP
+      <b>tools</b> the agent calls; a single <b>registry</b> exposes those tools to both <b>delivery</b>
+      surfaces — the stdio MCP server and the Streamlit app. <b>Click any node</b> to draw its lineage:
+      every box that feeds it and that it feeds lights up, connected by arrows.
     </div>
   </div>
 </div>
@@ -164,9 +164,7 @@ const STAGES = {
   delivery: {label: "Delivery",  color: "var(--deliver)"},
 };
 
-// node: id, lane, group?, n(ame), s(ub), d(escription)
 const NODES = [
-  // ---- sources
   {id:"csv", lane:"sources", n:"data_publication_dois.csv", s:"956 pubs · 148 datasets", d:"Scraped from e-conversion.de/publikationen. The BM25 corpus foundation — the server refuses to start without it."},
   {id:"enl", lane:"sources", n:"e-conversion-Converted.enl", s:"EndNote · ~1,584 recs", d:"Supplied EndNote library (SQLite). Primary abstract source; 905 records overlap the corpus."},
   {id:"scraper", lane:"sources", n:"scraper_cache.json", s:"raw scrape", d:"Raw e-conversion.de scraper output that the DOI list was derived from."},
@@ -175,7 +173,6 @@ const NODES = [
   {id:"members", lane:"sources", n:"e-conversion.de/members", s:"live scrape", d:"PI staff pages, scraped to build the PI cache."},
   {id:"nomad", lane:"sources", n:"NOMAD API", s:"live · uncached", d:"Public NOMAD materials database. Queried live at call time — no local cache."},
 
-  // ---- build
   {id:"b_abstracts", lane:"build", n:"build_abstracts_cache.py", s:"CSV+ENL+OpenAlex+S2", d:"Merges corpus DOIs with EndNote, OpenAlex and Semantic Scholar metadata into the abstracts cache."},
   {id:"b_embed", lane:"build", n:"build_embeddings_cache.py", s:"abstracts → 384-d", d:"Embeds each abstract with BGE-small into a 384-d vector array."},
   {id:"b_fulltext", lane:"build", n:"build_fulltext_cache.py", s:"Unpaywall/PMC/arXiv", d:"Per-DOI network pipeline: arXiv → PMC (JATS) → repos → publisher PDFs → HTML. Incremental & resumable."},
@@ -184,7 +181,6 @@ const NODES = [
   {id:"b_graph", lane:"build", n:"build_graph_cache.py", s:"pis → co-authorship", d:"Builds the PI co-authorship graph from shared publication DOIs (networkx node-link)."},
   {id:"b_proposal", lane:"build", n:"extract_proposal_summary.py", s:"proposal → md", d:"Extracts the proposal's Section 2 summary and the whole-document full text as markdown."},
 
-  // ---- caches
   {id:"c_abstracts", lane:"cache", n:"abstracts_cache.json", s:"~953 abstracts", d:"One entry per DOI: abstract + OpenAlex authors, journal, citation count."},
   {id:"c_embed", lane:"cache", n:"embeddings_cache.npz", s:"~956 × 384-d", d:"BGE-small vectors + a parallel DOI array. Backs semantic search and the corpus map."},
   {id:"c_fulltext", lane:"cache", n:"fulltext_cache.json", s:"947 full texts", d:"Full-text bodies keyed by lowercase DOI — network hits plus 544 locally-supplied PDFs (99% coverage)."},
@@ -193,7 +189,6 @@ const NODES = [
   {id:"c_propsum", lane:"cache", n:"proposal_summary.md", s:"§2 · ~1.5K tok", d:"Proposal Section 2 — injected into the chat system prompt."},
   {id:"c_propfull", lane:"cache", n:"proposal_fulltext.md", s:"whole · ~115K tok", d:"Whole proposal as markdown; served on demand by get_proposal_fulltext."},
 
-  // ---- tools (local)
   {id:"t_search", lane:"tools", group:"Search", n:"search_papers", s:"BM25 lexical", d:"Two-stage BM25 search (titles, then abstracts). Best for exact terminology, acronyms, author names."},
   {id:"t_semantic", lane:"tools", group:"Search", n:"semantic_search_papers", s:"BGE cosine", d:"Embedding search over BGE-small vectors. Best for conceptual queries."},
   {id:"t_similar", lane:"tools", group:"Search", n:"get_similar_papers", s:"nearest to a DOI", d:"Nearest papers to a given DOI's own embedding."},
@@ -209,14 +204,11 @@ const NODES = [
   {id:"t_communities", lane:"tools", group:"Collaboration", n:"collaboration_communities", s:"modularity", d:"Greedy-modularity PI communities."},
   {id:"t_nomad", lane:"tools", group:"Materials", n:"search_nomad", s:"live external", d:"Live public NOMAD materials search — elements/formula/author/text."},
   {id:"t_status", lane:"tools", group:"Ops", n:"server_status", s:"reads all caches", d:"Health check: cluster, tool count, LLM endpoint, and per-cache availability / size / mtime."},
-  // ---- tools (remote, BYOK)
   {id:"t_elab", lane:"tools", group:"Remote (BYOK)", n:"elab_*", s:"eLabFTW ELN", d:"eLabFTW lab-notebook tools, fetched dynamically per session from the researchmcp proxy (query-token auth). Chat-only; not in the MCP server."},
   {id:"t_dt", lane:"tools", group:"Remote (BYOK)", n:"dt_*", s:"DataTagger", d:"DataTagger repository tools, fetched dynamically per session (bearer-token auth). Chat-only; not in the MCP server."},
 
-  // ---- registry
   {id:"reg", lane:"registry", n:"FastMCP  mcp  +  openai_tools", s:"single source of truth", d:"Local tools are defined with @mcp.tool() in server.py. The openai_tools bridge derives OpenAI schemas straight from that registry, so the MCP server and the chat app can never drift out of sync."},
 
-  // ---- delivery
   {id:"d_mcp", lane:"delivery", n:"MCP server (stdio)", s:".mcp.json · econversion", d:"python src/server.py — the 15 local tools exposed over stdio to Claude and other MCP clients."},
   {id:"d_app", lane:"delivery", n:"Streamlit app", s:"Chat · Corpus Map", d:"src/app.py — chat tool-use loop (≤10 rounds), the corpus-map tab, and this pipeline map."},
   {id:"d_llm", lane:"delivery", n:"Multi-provider LLM", s:"gwdg · openrouter", d:"Sidebar provider select. OpenRouter auto-picks the cheapest guardrail-passing, tool-calling model under 1 €/Mtok; GWDG uses a static default."},
@@ -224,25 +216,20 @@ const NODES = [
   {id:"d_feedback", lane:"delivery", n:"Feedback form", s:"JSONL log", d:"Per-answer bug-report / general-feedback popover, appended to data/feedback/feedback.jsonl. Local only."},
 ];
 
-// directed edges [from, to]
 const EDGES = [
-  // sources → build
   ["scraper","csv"],
   ["csv","b_abstracts"], ["csv","b_fulltext"],
   ["enl","b_abstracts"],
   ["pdfs","b_ingest"],
   ["members","b_pis"],
   ["proposal","b_proposal"],
-  // build → cache
   ["b_abstracts","c_abstracts"],
   ["b_embed","c_embed"],
   ["b_fulltext","c_fulltext"], ["b_ingest","c_fulltext"],
   ["b_pis","c_pis"],
   ["b_graph","c_graph"],
   ["b_proposal","c_propsum"], ["b_proposal","c_propfull"],
-  // cache → build (derived)
   ["c_abstracts","b_embed"], ["c_pis","b_graph"],
-  // cache/source → tools
   ["csv","t_search"], ["csv","t_bydoi"], ["csv","t_list"],
   ["c_abstracts","t_search"], ["c_abstracts","t_semantic"], ["c_abstracts","t_bydoi"], ["c_abstracts","t_list"], ["c_abstracts","t_getpi"],
   ["c_embed","t_semantic"], ["c_embed","t_similar"],
@@ -251,24 +238,19 @@ const EDGES = [
   ["c_pis","t_searchpis"], ["c_pis","t_getpi"],
   ["c_graph","t_collab"], ["c_graph","t_joint"], ["c_graph","t_centrality"], ["c_graph","t_communities"],
   ["nomad","t_nomad"],
-  // corpus map reads embeddings directly
   ["c_embed","d_app"],
-  // local tools → registry
   ["t_search","reg"], ["t_semantic","reg"], ["t_similar","reg"], ["t_bydoi","reg"], ["t_fulltext","reg"],
   ["t_list","reg"], ["t_propfull","reg"], ["t_searchpis","reg"], ["t_getpi","reg"], ["t_collab","reg"],
   ["t_joint","reg"], ["t_centrality","reg"], ["t_communities","reg"], ["t_nomad","reg"], ["t_status","reg"],
-  // registry → delivery
   ["reg","d_mcp"], ["reg","d_app"],
-  // remote tools via panel → chat
   ["d_panel","t_elab"], ["d_panel","t_dt"], ["t_elab","d_app"], ["t_dt","d_app"],
-  // delivery internal
   ["d_llm","d_app"], ["d_app","d_feedback"],
 ];
 
 const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
 const parents = {}, children = {};
 NODES.forEach(n => { parents[n.id] = []; children[n.id] = []; });
-EDGES.forEach(([a,b]) => { children[a].push(b); parents[b].push(a); });
+EDGES.forEach(([a, b]) => { children[a].push(b); parents[b].push(a); });
 
 function lineage(id) {
   const set = new Set([id]);
@@ -277,46 +259,60 @@ function lineage(id) {
   return set;
 }
 
-// ---- render legend
-document.getElementById("legend").innerHTML = Object.entries(STAGES)
-  .map(([k,v]) => `<span><i style="background:${v.color}"></i>${v.label}</span>`).join("");
+function stageColor(lane) {
+  return getComputedStyle(document.documentElement).getPropertyValue(STAGES[lane].color.replace(/var\(|\)/g, "")).trim();
+}
 
-// ---- render lanes
-const lanesEl = document.getElementById("lanes");
-for (const [laneKey, meta] of Object.entries(STAGES)) {
-  const lane = document.createElement("div");
-  lane.className = "lane";
-  lane.innerHTML = `<div class="head"><b style="background:${meta.color}"></b>${meta.label}</div>`;
-  const stack = document.createElement("div"); stack.className = "stack";
+// ---- legend
+document.getElementById("legend").innerHTML = Object.entries(STAGES)
+  .map(([k, v]) => `<span><i style="background:${v.color}"></i>${v.label}</span>`).join("");
+
+// ---- bands (vertical), with flow connectors between them
+const board = document.getElementById("board");
+const wires = document.getElementById("wires");
+const stageKeys = Object.keys(STAGES);
+stageKeys.forEach((laneKey, si) => {
+  const meta = STAGES[laneKey];
+  const laneNodes = NODES.filter(n => n.lane === laneKey);
+  const band = document.createElement("div");
+  band.className = "band";
+  band.style.setProperty("--stage", meta.color);
+  band.innerHTML = `<div class="bhead"><b></b>${meta.label}<span class="count">${laneNodes.length} node${laneNodes.length > 1 ? "s" : ""}</span></div>`;
+  const body = document.createElement("div"); body.className = "body";
   let lastGroup = null;
-  NODES.filter(n => n.lane === laneKey).forEach(n => {
+  laneNodes.forEach(n => {
     if (n.group && n.group !== lastGroup) {
       const gl = document.createElement("div"); gl.className = "grouplabel"; gl.textContent = n.group;
-      stack.appendChild(gl); lastGroup = n.group;
+      body.appendChild(gl); lastGroup = n.group;
     }
     const card = document.createElement("div");
     card.className = "node"; card.dataset.id = n.id;
     card.style.setProperty("--stage", meta.color);
     card.innerHTML = `<div class="n">${n.n}</div><div class="s">${n.s}</div>`;
     card.addEventListener("click", () => select(n.id));
-    stack.appendChild(card);
+    body.appendChild(card);
   });
-  lane.appendChild(stack);
-  lanesEl.appendChild(lane);
-}
+  band.appendChild(body);
+  board.appendChild(band);
+
+  if (si < stageKeys.length - 1) {
+    const flow = document.createElement("div");
+    flow.className = "flow";
+    flow.innerHTML = `<svg viewBox="0 0 26 26"><line class="stem" x1="13" y1="1" x2="13" y2="18"/><path class="tip" d="M13 25 L8 16 L18 16 Z"/></svg>`;
+    board.appendChild(flow);
+  }
+});
 
 const detailEl = document.getElementById("detail");
 const resetBtn = document.getElementById("reset");
 const INTRO = detailEl.innerHTML;
 let current = null;
 
-function laneColor(id) { return STAGES[byId[id].lane].color; }
-
 function select(id) {
   if (current === id) { clearSel(); return; }
   current = id;
   const lit = lineage(id);
-  lanesEl.classList.add("filtering");
+  board.classList.add("filtering");
   document.querySelectorAll(".node").forEach(el => {
     const nid = el.dataset.id;
     el.classList.toggle("lit", lit.has(nid));
@@ -324,30 +320,62 @@ function select(id) {
   });
   resetBtn.classList.add("on");
   renderDetail(id);
+  drawWires(lit);
 }
 
 function clearSel() {
   current = null;
-  lanesEl.classList.remove("filtering");
-  document.querySelectorAll(".node").forEach(el => el.classList.remove("lit","focus"));
+  board.classList.remove("filtering");
+  document.querySelectorAll(".node").forEach(el => el.classList.remove("lit", "focus"));
   resetBtn.classList.remove("on");
   detailEl.innerHTML = INTRO;
+  wires.innerHTML = "";
+}
+
+// Draw an arrow between two cards for every edge whose ends are both lit.
+function drawWires(lit) {
+  const brect = board.getBoundingClientRect();
+  wires.setAttribute("viewBox", `0 0 ${brect.width} ${brect.height}`);
+  wires.setAttribute("width", brect.width);
+  wires.setAttribute("height", brect.height);
+  const cardOf = {};
+  document.querySelectorAll(".node").forEach(el => { cardOf[el.dataset.id] = el; });
+
+  let svg = "";
+  EDGES.forEach(([a, b]) => {
+    if (!lit.has(a) || !lit.has(b)) return;
+    const ea = cardOf[a], eb = cardOf[b];
+    if (!ea || !eb) return;
+    const ra = ea.getBoundingClientRect(), rb = eb.getBoundingClientRect();
+    const ax = ra.left - brect.left + ra.width / 2, ay = ra.top - brect.top + ra.height / 2;
+    const bx = rb.left - brect.left + rb.width / 2, by = rb.top - brect.top + rb.height / 2;
+    // start/end on the facing edges so the arrowhead sits in the gap
+    const down = by >= ay;
+    const sy = down ? ay + ra.height / 2 : ay - ra.height / 2;
+    const ey = down ? by - rb.height / 2 : by + rb.height / 2;
+    const k = (ey - sy) * 0.5;
+    const col = stageColor(byId[a].lane);
+    svg += `<path class="wire" d="M ${ax} ${sy} C ${ax} ${sy + k} ${bx} ${ey - k} ${bx} ${ey}" stroke="${col}"/>`;
+    const h = down ? -1 : 1; // arrowhead points toward the target
+    svg += `<path class="wire-head" fill="${col}" d="M ${bx} ${ey} L ${bx - 4.5} ${ey + 8 * h} L ${bx + 4.5} ${ey + 8 * h} Z"/>`;
+  });
+  wires.innerHTML = svg;
 }
 
 function renderDetail(id) {
   const n = byId[id];
-  const color = laneColor(id);
-  const mk = (ids) => ids.length
+  const color = STAGES[n.lane].color;
+  const mk = ids => ids.length
     ? `<ul>${ids.map(x => `<li>${byId[x].n}</li>`).join("")}</ul>`
     : `<span class="none">—</span>`;
   detailEl.innerHTML = `
     <div class="dhead">
       <span class="chip" style="background:${color}">${STAGES[n.lane].label}</span>
       <span class="dname">${n.n}</span>
-      <span style="color:var(--faint);font-size:12px">${n.s}</span>
+      <span style="color:var(--faint);font-size:11.5px">${n.s}</span>
     </div>
     <p class="ddesc">${n.d}</p>
-    <div class="flow">
+    <div class="flowcols">
       <div><h4>Feeds from</h4>${mk(parents[id])}</div>
       <div><h4>Feeds into</h4>${mk(children[id])}</div>
     </div>`;
@@ -355,6 +383,12 @@ function renderDetail(id) {
 
 resetBtn.addEventListener("click", clearSel);
 document.addEventListener("keydown", e => { if (e.key === "Escape") clearSel(); });
+// keep wires aligned when the iframe is resized
+let rAF; window.addEventListener("resize", () => {
+  if (!current) return;
+  cancelAnimationFrame(rAF);
+  rAF = requestAnimationFrame(() => drawWires(lineage(current)));
+});
 </script>
 </body>
 </html>
