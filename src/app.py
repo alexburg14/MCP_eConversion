@@ -263,7 +263,9 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
     for _ in range(_MAX_TOOL_ROUNDS):
         response = client.chat.completions.create(
             model=model,
-            max_tokens=2048,
+            # Headroom for long list answers (e.g. "all papers by X" can be
+            # 30-40 items); 2048 truncated those mid-list.
+            max_tokens=8192,
             messages=msgs,
             extra_body=extra_body,
             **kwargs,
@@ -332,6 +334,32 @@ def _feedback_widget(key: str, question: str, answer: str, model: str) -> None:
 @st.cache_data(show_spinner="Computing corpus map (UMAP + clustering)...")
 def _build_corpus_map(n_clusters: int) -> list[dict]:
     return corpus_map.build_map(server.papers_by_doi, n_clusters=n_clusters)
+
+
+_COLLAB_GRAPH_PATH = _REPO_ROOT / "data" / "cache" / "collaboration_graph.json"
+
+
+@st.cache_data(show_spinner=False)
+def _build_collab_graph() -> dict | None:
+    """PI co-authorship graph shaped for the d3 force map: nodes with degree +
+    a short surname label, and undirected weighted links. None if not built."""
+    if not _COLLAB_GRAPH_PATH.exists():
+        return None
+    g = json.loads(_COLLAB_GRAPH_PATH.read_text(encoding="utf-8"))
+    deg: dict[str, int] = {}
+    for link in g["links"]:
+        deg[link["source"]] = deg.get(link["source"], 0) + 1
+        deg[link["target"]] = deg.get(link["target"], 0) + 1
+    nodes = [
+        {
+            "id": n["id"], "name": n["name"], "label": (n["name"].split() or [n["name"]])[-1],
+            "group": n.get("group", ""), "inst": n.get("institution", ""),
+            "papers": n.get("paper_count", 0), "deg": deg.get(n["id"], 0),
+        }
+        for n in g["nodes"]
+    ]
+    links = [{"source": l["source"], "target": l["target"], "weight": l["weight"]} for l in g["links"]]
+    return {"nodes": nodes, "links": links}
 
 
 # Corpus-map cluster colors: Tableau-20, saturated hues first so the common
@@ -450,7 +478,9 @@ st.set_page_config(page_title=_CFG.cluster.display_name, page_icon="⚡", layout
 st.title(f"⚡ {_CFG.cluster.display_name}")
 st.caption(f"{len(server.papers)} publications · {len(server._PIS)} PIs")
 
-tab_chat, tab_map, tab_pipeline = st.tabs(["💬 Chat", "🗺️ Corpus Map", "🔧 Pipeline"])
+tab_chat, tab_map, tab_collab, tab_pipeline = st.tabs(
+    ["💬 Chat", "🗺️ Corpus Map", "🤝 Collaboration", "🔧 Pipeline"]
+)
 
 # Corpus map only needs the embeddings cache, not the API key — render it
 # before the chat tab's st.stop() so a missing key doesn't hide it too.
@@ -511,6 +541,25 @@ with tab_map:
             f'<div style="display:flex;flex-wrap:wrap">{swatches}</div>',
             unsafe_allow_html=True,
         )
+
+# Collaboration network: PI co-authorship graph (data/cache/collaboration_graph.json)
+# as a d3 force map. Same cache the collaboration_* tools query; no API key needed.
+with tab_collab:
+    st.caption(
+        "PI co-authorship network from the cluster's publications — nodes are PIs "
+        "(sized by number of collaborators, colored by institution), edges are shared "
+        "papers (thicker = more). Click a PI to isolate who they publish with."
+    )
+    _collab = _build_collab_graph()
+    if _collab is None:
+        st.info("Collaboration graph not built. Run: `python src/scripts/build_graph_cache.py`")
+    else:
+        _collab_html = (
+            (Path(__file__).parent / "collaboration_map.html").read_text(encoding="utf-8")
+            .replace("__NODES__", json.dumps(_collab["nodes"]))
+            .replace("__LINKS__", json.dumps(_collab["links"]))
+        )
+        components.html(_collab_html, height=640, scrolling=False)
 
 # Pipeline map: a static, self-contained HTML lineage diagram of the whole
 # sources → build → caches → tools → registry → delivery pipeline. Rendered in

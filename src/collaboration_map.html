@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PI Collaboration Network</title>
+<style>
+  :root {
+    --ground: #F1F2F5; --panel: #FFFFFF; --ink: #171A21; --ink-2: #39404E;
+    --muted: #5C6474; --faint: #8C94A3; --line: #DDE0E7; --edge: #C6CAD4;
+    --shadow: 0 4px 16px rgba(23,26,33,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #111319; --panel: #191C23; --ink: #E9EBF0; --ink-2: #C3C8D2;
+      --muted: #99A1B0; --faint: #737B8A; --line: #2A2F39; --edge: #3A4150;
+      --shadow: 0 6px 20px rgba(0,0,0,.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; color: var(--ink);
+    font: 400 13px/1.5 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  #graph { width: 100%; height: 100%; display: block; cursor: grab; }
+  #graph.grabbing { cursor: grabbing; }
+  .legend { position: absolute; top: 8px; left: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px;
+    background: color-mix(in srgb, var(--panel) 82%, transparent); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 9px; font-size: 11.5px; color: var(--muted); max-width: 70%; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .hint { position: absolute; bottom: 8px; left: 8px; font-size: 11px; color: var(--faint); }
+  .reset { position: absolute; top: 8px; right: 8px; border: 1px solid var(--edge); background: var(--panel);
+    color: var(--ink-2); font: inherit; font-size: 11.5px; padding: 4px 10px; border-radius: 7px;
+    cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .15s; }
+  .reset.on { opacity: 1; pointer-events: auto; }
+  .node-label { font-size: 10px; fill: var(--ink-2); paint-order: stroke; stroke: var(--ground);
+    stroke-width: 2.5px; stroke-linejoin: round; pointer-events: none; }
+  .tip { position: absolute; pointer-events: none; z-index: 10; background: #1b1e26; color: #e9ebf0;
+    border-radius: 7px; padding: 7px 10px; font-size: 12px; max-width: 260px; box-shadow: var(--shadow);
+    opacity: 0; transition: opacity .1s; }
+  .tip b { color: #fff; } .tip .m { color: #99A1B0; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg id="graph"></svg>
+  <div class="legend" id="legend"></div>
+  <button class="reset" id="reset">Reset</button>
+  <div class="hint">drag a node · scroll to zoom · hover for details · click a PI to isolate their collaborators</div>
+  <div class="tip" id="tip"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+  const NODES = __NODES__;
+  const LINKS = __LINKS__;
+  const INST_COLORS = { "TUM": "#4C78A8", "LMU": "#54A24B", "FHI": "#F58518", "MPI FKF": "#B279A2" };
+  const OTHER = "#9AA79F";
+  const colorOf = inst => INST_COLORS[inst] || OTHER;
+  const radiusOf = d => 4.5 + Math.sqrt(d.deg) * 2.4;
+
+  const wrap = document.getElementById("wrap");
+  const svg = d3.select("#graph");
+  const tip = document.getElementById("tip");
+  const resetBtn = document.getElementById("reset");
+  let W = wrap.clientWidth || 700, H = wrap.clientHeight || 600;
+  svg.attr("viewBox", [0, 0, W, H]);
+
+  const root = svg.append("g");
+  const gLink = root.append("g").attr("stroke-linecap", "round");
+  const gNode = root.append("g");
+  const gLabel = root.append("g");
+
+  // adjacency for click-to-isolate
+  const adj = {}; NODES.forEach(n => adj[n.id] = new Set([n.id]));
+  LINKS.forEach(l => { adj[l.source].add(l.target); adj[l.target].add(l.source); });
+
+  const link = gLink.selectAll("line").data(LINKS).join("line")
+    .attr("stroke", "var(--edge)")
+    .attr("stroke-width", d => Math.max(0.6, Math.sqrt(d.weight)));
+
+  const node = gNode.selectAll("circle").data(NODES).join("circle")
+    .attr("r", radiusOf)
+    .attr("fill", d => colorOf(d.inst))
+    .attr("stroke", "var(--panel)").attr("stroke-width", 1.5)
+    .style("cursor", "pointer")
+    .call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; svg.node().classList.add("grabbing"); })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; svg.node().classList.remove("grabbing"); }));
+
+  const label = gLabel.selectAll("text").data(NODES).join("text")
+    .attr("class", "node-label").attr("text-anchor", "middle").attr("dy", d => -radiusOf(d) - 3)
+    .text(d => d.label);
+
+  node.on("mouseenter", (e, d) => {
+      tip.innerHTML = `<b>${d.name}</b><br><span class="m">${d.group || "—"} · ${d.inst || "—"}</span>` +
+        `<br><span class="m">${d.papers} papers · ${d.deg} collaborator${d.deg === 1 ? "" : "s"}</span>`;
+      tip.style.opacity = 1;
+    })
+    .on("mousemove", e => {
+      const r = wrap.getBoundingClientRect();
+      let x = e.clientX - r.left + 12, y = e.clientY - r.top + 12;
+      if (x + 270 > W) x = e.clientX - r.left - 270;
+      tip.style.left = x + "px"; tip.style.top = y + "px";
+    })
+    .on("mouseleave", () => { tip.style.opacity = 0; })
+    .on("click", (e, d) => { e.stopPropagation(); isolate(d.id); });
+  svg.on("click", () => isolate(null));
+
+  let focus = null;
+  function isolate(id) {
+    focus = (focus === id) ? null : id;
+    const on = focus !== null;
+    resetBtn.classList.toggle("on", on);
+    const near = on ? adj[focus] : null;
+    node.attr("opacity", d => !on || near.has(d.id) ? 1 : 0.12);
+    label.attr("opacity", d => !on || near.has(d.id) ? 1 : 0.05);
+    link.attr("stroke", d => on && (d.source.id === focus || d.target.id === focus) ? colorOf(byId(focus).inst) : "var(--edge)")
+        .attr("opacity", d => !on ? 1 : (d.source.id === focus || d.target.id === focus ? 0.95 : 0.06));
+  }
+  const byId = id => NODES.find(n => n.id === id);
+  resetBtn.addEventListener("click", () => isolate(null));
+
+  const sim = d3.forceSimulation(NODES)
+    .force("link", d3.forceLink(LINKS).id(d => d.id).distance(d => 44 + 16 / Math.sqrt(d.weight)).strength(0.5))
+    .force("charge", d3.forceManyBody().strength(-190))
+    .force("center", d3.forceCenter(W / 2, H / 2))
+    .force("collide", d3.forceCollide().radius(d => radiusOf(d) + 6))
+    .force("x", d3.forceX(W / 2).strength(0.05)).force("y", d3.forceY(H / 2).strength(0.05))
+    .on("tick", () => {
+      link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+      node.attr("cx", d => d.x).attr("cy", d => d.y);
+      label.attr("x", d => d.x).attr("y", d => d.y);
+    });
+
+  // zoom / pan
+  svg.call(d3.zoom().scaleExtent([0.4, 4]).on("zoom", e => root.attr("transform", e.transform)))
+     .on("dblclick.zoom", null);
+
+  // legend (only institutions that appear)
+  const present = Array.from(new Set(NODES.map(n => n.inst)));
+  const order = ["TUM", "LMU", "FHI", "MPI FKF"];
+  const legendItems = order.filter(i => present.includes(i)).concat(present.some(i => !order.includes(i)) ? ["Other"] : []);
+  document.getElementById("legend").innerHTML = legendItems
+    .map(i => `<span><i style="background:${i === "Other" ? OTHER : colorOf(i)}"></i>${i}</span>`).join("");
+
+  addEventListener("resize", () => {
+    W = wrap.clientWidth || W; H = wrap.clientHeight || H;
+    svg.attr("viewBox", [0, 0, W, H]);
+    sim.force("center", d3.forceCenter(W / 2, H / 2)).alpha(0.3).restart();
+  });
+</script>
+</body>
+</html>
