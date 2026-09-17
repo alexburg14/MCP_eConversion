@@ -33,7 +33,11 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 CSV = DATA_DIR / "sources" / "data_publication_dois.csv"
 PDF_DIR = DATA_DIR / "sources" / "pdfs"
 OUTPUT = DATA_DIR / "cache" / "fulltext_cache.json"
-MIN_CHARS = 3000  # same floor as build_fulltext_cache.py: rejects landing-page stubs
+# A parsed %PDF is genuine content, so it gets a lower floor; the 3000-char
+# floor mainly guards HTML landing-page stubs, which take the trafilatura path.
+# (Short but real papers — e.g. Acta Cryst communications — parse to ~2.7-2.9k.)
+MIN_CHARS_PDF = 1500
+MIN_CHARS_HTML = 3000
 SOURCE_ORIGIN = "collaborator"
 
 
@@ -67,11 +71,11 @@ def extract(path: Path) -> tuple[str | None, str | None]:
         except Exception as exc:  # corrupt PDF slips past the header check
             print(f"    ! pymupdf4llm failed on {path.name}: {exc}", flush=True)
             return None, None
-        return (text if text and len(text) >= MIN_CHARS else None), "pdf"
+        return (text if text and len(text) >= MIN_CHARS_PDF else None), "pdf"
     # Not a PDF: an HTML page saved with a .pdf name. Recover the body if present.
     html = path.read_text(encoding="utf-8", errors="ignore")
     text = trafilatura.extract(html, output_format="markdown", include_tables=False)
-    return (text if text and len(text) >= MIN_CHARS else None), "html"
+    return (text if text and len(text) >= MIN_CHARS_HTML else None), "html"
 
 
 def main() -> None:

@@ -6,7 +6,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 
 - **956 publications** scraped from `e-conversion.de/publikationen`
 - **953 abstracts (99.7% coverage)** cached locally — no API calls at search time
-- **947 full-text bodies (99.1% coverage)** cached locally — 403 harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs and HTML landing pages, plus 544 supplied locally by collaborators via institutional access
+- **953 full-text bodies (99.7% coverage)** cached locally — 403 harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs and HTML landing pages, plus 550 supplied locally by collaborators via institutional access
 - **148 dataset links** (e.g. crystal structures in CSD/CCDC) attached to their parent papers
 - **42 PIs** scraped from `e-conversion.de/members/` with group, department, institution, research focus, application fields, and (where listed) their publication DOIs — links each PI to their papers in the cache
 - **Two-stage BM25 search** — searches titles first, falls back to abstracts when the abstract index scores higher (handles both precise and conceptual queries)
@@ -189,7 +189,7 @@ Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes two outpu
 | `data/sources/pdfs/` | *(source)* Locally-supplied full-text PDFs (a collaborator's local full-texts), filenames encode the DOI; `_unmatched/` holds off-corpus and stub PDFs pending triage |
 | `data/cache/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
 | `data/cache/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
-| `data/cache/fulltext_cache.json` | 947 full-text bodies keyed by DOI (pdf 730 · pmc 138 · html 79) |
+| `data/cache/fulltext_cache.json` | 953 full-text bodies keyed by DOI (pdf 736 · pmc 138 · html 79) |
 | `data/cache/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
 | `data/cache/collaboration_graph.json` | Node-link JSON of the PI co-authorship graph |
 | `data/cache/proposal_summary.md` | Section 2 of the proposal, extracted for chat-interface system context |

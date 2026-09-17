@@ -181,7 +181,7 @@ def get_paper_fulltext(
     doi: Annotated[str, Field(description="DOI of the paper")],
 ) -> str:
     """Return full text for a single paper by DOI, if available.
-    Cached for ~99% of the corpus (947 of 956) — open-access harvest plus
+    Cached for ~99% of the corpus (953 of 956) — open-access harvest plus
     locally-supplied PDFs — so it is worth trying for most DOIs."""
     doi = doi.strip().lower()
     entry = _FULLTEXTS.get(doi)

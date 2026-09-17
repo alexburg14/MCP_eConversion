@@ -125,7 +125,7 @@ Separately, `config.toml`'s `[cluster]` table gained optional identity fields (`
 - ~~**Author names are truncated**~~ Resolved 2026-06-12: OpenAlex `authorships` are overlaid onto all results (see step 9). The CSV column itself is still truncated (upstream scraper bug) but no longer surfaces anywhere. Note: OpenAlex names contain Unicode-hyphen variants (U+2010 vs ASCII `-`) — normalize before exact author matching / co-authorship graphs.
 - ~~**BM25 is still lexical**~~ Resolved 2026-06-12: `semantic_search_papers` (BGE-small embeddings) covers conceptual/synonym queries as a parallel tool (see step 10).
 - **Single-user setup** — currently runs locally on one machine, not accessible cluster-wide
-- **Full-text coverage is near-complete** — 947/956 (99.1%) cached after two rounds of locally-supplied PDFs (step 11); was 402/956 (42%) from the network pipeline alone. Only 9 remain: no preprint, no PMC deposit, and not in the supplied folders. Wiley/ACS-without-NIH-funding was the dominant failure mode before the local PDFs closed it.
+- **Full-text coverage is near-complete** — 953/956 (99.7%) cached. Only 3 remain: two SPIE proceedings (10.1117/*, no OA/preprint) and one RSC paper (10.1039/d2cc03286d) whose supplied file is an HTML figure-viewer stub. A third pass (2026-09-17) recovered 6 papers that were on hand but mis-filed by ingest — three quarantined in `_unmatched/` under DOI-suffix-only names, one wrongly flagged `duplicate_` (its only copy), and two short Acta Cryst papers rejected by the 3000-char floor. Fix: `ingest_local_pdfs.py` now uses a 1500-char floor for real (parsed) PDFs and keeps 3000 for the HTML/trafilatura path, which is what actually guards against landing-page stubs.
 - **Full text is not yet wired into search** — `fulltext_cache.json` is populated but `search_papers` still searches only abstracts. Next step: either extend BM25 to full text or let the LLM call `get_paper_fulltext` for top candidates.
 
 ---
@@ -140,7 +140,7 @@ Separately, `config.toml`'s `[cluster]` table gained optional identity fields (`
 - **Keep caches fresh**: run `build_abstracts_cache.py` and `build_pis_cache.py` when the website changes (the former also refreshes citation counts); rebuild `embeddings_cache.npz` after abstract refresh
 
 ### Medium term
-- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 947 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
+- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 953 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
 - **Migrate from JSON to a database**: SQLite is the natural first step (same format as the `.enl`). PostgreSQL when cluster-wide concurrent access is needed.
 - **PDF extractor upgrade**: PyMuPDF4LLM is sufficient for plain prose. For papers with complex layouts/equations/tables, upgrade to Marker (ML-based, surya models ~1-2GB) or MinerU (heaviest, best quality).
 
@@ -170,5 +170,5 @@ Repo is split into `src/` (code, tracked) and `data/` (gitignored), the latter s
 | `data/sources/pdfs/` | *(source)* A collaborator's full-text PDFs, keyed by DOI; `_unmatched/` holds off-corpus + stub files |
 | `data/cache/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
 | `data/cache/embeddings_cache.npz` | 956 × 384 BGE-small vectors + parallel DOI array |
-| `data/cache/fulltext_cache.json` | 947 full-text bodies keyed by DOI (source: pdf 730 / pmc 138 / html 79; `source_origin` is `kolja` or `collaborator` for the 544 locally-supplied PDFs, else `publisher` / `pmc` / `arxiv` / `repository`) |
+| `data/cache/fulltext_cache.json` | 953 full-text bodies keyed by DOI (source: pdf 736 / pmc 138 / html 79; `source_origin` is `kolja` or `collaborator` for the 550 locally-supplied PDFs, else `publisher` / `pmc` / `arxiv` / `repository`) |
 | `data/cache/pis_cache.json` | 42 PIs keyed by smid (name, group, dept, institution, research focus, application fields, publication DOIs) |
