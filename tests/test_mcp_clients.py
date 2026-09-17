@@ -80,7 +80,7 @@ def test_friendly_error_403():
         def __init__(self):
             super().__init__("Client error '403 Forbidden' for url 'https://x'")
     msg = mcp_clients._friendly_error(_Fake403())
-    assert "403" in msg or "Nicht berechtigt" in msg
+    assert "403" in msg or "not authorized" in msg.lower()
 
 
 def test_friendly_error_nested_exceptiongroup():
