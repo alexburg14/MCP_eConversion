@@ -72,7 +72,7 @@ class _Fake401(Exception):
 
 def test_friendly_error_401():
     msg = mcp_clients._friendly_error(_Fake401())
-    assert "ungültig" in msg or "401" in msg
+    assert "invalid" in msg.lower() or "401" in msg
 
 
 def test_friendly_error_403():
@@ -88,7 +88,7 @@ def test_friendly_error_nested_exceptiongroup():
     leaf = _Fake401()
     eg = ExceptionGroup("unhandled errors in a TaskGroup", [leaf])
     msg = mcp_clients._friendly_error(eg)
-    assert "ungültig" in msg or "401" in msg
+    assert "invalid" in msg.lower() or "401" in msg
 
 
 def test_friendly_error_unknown_type_returns_something():
@@ -124,7 +124,7 @@ def test_build_openai_tools_server_error_yields_unavailable_tool(monkeypatch):
     tools = rc.build_openai_tools()
     assert len(tools) == 1
     assert tools[0]["function"]["name"] == "elab___unavailable__"
-    assert "ungültig" in tools[0]["function"]["description"]
+    assert "invalid" in tools[0]["function"]["description"].lower()
 
 
 def test_no_active_sources_yields_no_tools():
