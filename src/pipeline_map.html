@@ -349,15 +349,32 @@ function drawWires(lit) {
     const ra = ea.getBoundingClientRect(), rb = eb.getBoundingClientRect();
     const ax = ra.left - brect.left + ra.width / 2, ay = ra.top - brect.top + ra.height / 2;
     const bx = rb.left - brect.left + rb.width / 2, by = rb.top - brect.top + rb.height / 2;
-    // start/end on the facing edges so the arrowhead sits in the gap
-    const down = by >= ay;
-    const sy = down ? ay + ra.height / 2 : ay - ra.height / 2;
-    const ey = down ? by - rb.height / 2 : by + rb.height / 2;
-    const k = (ey - sy) * 0.5;
     const col = stageColor(byId[a].lane);
-    svg += `<path class="wire" d="M ${ax} ${sy} C ${ax} ${sy + k} ${bx} ${ey - k} ${bx} ${ey}" stroke="${col}"/>`;
-    const h = down ? -1 : 1; // arrowhead points toward the target
-    svg += `<path class="wire-head" fill="${col}" d="M ${bx} ${ey} L ${bx - 4.5} ${ey + 8 * h} L ${bx + 4.5} ${ey + 8 * h} Z"/>`;
+
+    // Route along the dominant axis: cross-stage edges run vertically (exit the
+    // card's bottom/top), within-stage edges run horizontally (exit the side).
+    // A same-stage edge drawn with vertical tangents looks like an odd loop.
+    let sx, sy, ex, ey, c1x, c1y, c2x, c2y, hx, hy;
+    if (Math.abs(by - ay) >= Math.abs(bx - ax)) {
+      const down = by >= ay;
+      sx = ax; sy = down ? ay + ra.height / 2 : ay - ra.height / 2;
+      ex = bx; ey = down ? by - rb.height / 2 : by + rb.height / 2;
+      const k = (ey - sy) * 0.5;
+      c1x = sx; c1y = sy + k; c2x = ex; c2y = ey - k;
+      hx = 0; hy = down ? 1 : -1;
+    } else {
+      const right = bx >= ax;
+      sx = right ? ax + ra.width / 2 : ax - ra.width / 2; sy = ay;
+      ex = right ? bx - rb.width / 2 : bx + rb.width / 2; ey = by;
+      const k = (ex - sx) * 0.5;
+      c1x = sx + k; c1y = sy; c2x = ex - k; c2y = ey;
+      hx = right ? 1 : -1; hy = 0;
+    }
+    svg += `<path class="wire" d="M ${sx} ${sy} C ${c1x} ${c1y} ${c2x} ${c2y} ${ex} ${ey}" stroke="${col}"/>`;
+    // arrowhead: triangle at the target end, pointing along (hx, hy)
+    const b1x = ex - 8 * hx - 4.5 * hy, b1y = ey - 8 * hy + 4.5 * hx;
+    const b2x = ex - 8 * hx + 4.5 * hy, b2y = ey - 8 * hy - 4.5 * hx;
+    svg += `<path class="wire-head" fill="${col}" d="M ${ex} ${ey} L ${b1x} ${b1y} L ${b2x} ${b2y} Z"/>`;
   });
   wires.innerHTML = svg;
 }
