@@ -10,6 +10,7 @@ Requires API_KEY in the environment or in a .env file at the repo root.
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,8 +23,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import server  # loads all caches at import time
 import corpus_map
 from config import get_config
+from logging_config import configure_logging, get_logger
 import openai_tools
 import mcp_clients
+
+configure_logging()  # idempotent; server import already did this
+log = get_logger("app")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CFG = get_config()
@@ -173,6 +178,11 @@ Four collaboration-graph tools answer network questions that search cannot:
 - collaboration_centrality(): which PIs bridge otherwise-separate groups?
 - collaboration_communities(): which clusters of PIs work closely together?
 
+When a question needs more than the abstract — specific methods, results, experimental \
+details, or exact numbers — call get_paper_fulltext(doi) on the most relevant paper(s) \
+from your search results before answering. Full text is cached for ~99% of the corpus; \
+if it comes back missing, say so and answer from the abstract.
+
 search_nomad queries the public NOMAD materials repository — data EXTERNAL to the \
 cluster, not e-conversion papers. Use it when asked whether computed or measured data \
 exists for a material, or what a PI has deposited. Report total_matches first; the \
@@ -242,11 +252,12 @@ def _remote_system_note() -> str:
     )
 
 
-def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str]]:
-    """Run the tool-use loop; return (answer_text, list_of_tool_calls_summary)."""
+def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str], float]:
+    """Run the tool-use loop; return (answer_text, tool_calls_summary, elapsed_seconds)."""
     tool_log: list[str] = []
     sys_content = _SYSTEM + _remote_system_note()
     msgs = [{"role": "system", "content": sys_content}] + list(messages)
+    start = time.perf_counter()
     # Tools are rebuilt per call: local + (session) remote tools. A user who
     # connects eLabFTW/DataTagger gets those tools; without a token this is
     # exactly the local-only list from before.
@@ -260,7 +271,8 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
         else:
             kwargs.update(extra)
 
-    for _ in range(_MAX_TOOL_ROUNDS):
+    for round_num in range(_MAX_TOOL_ROUNDS):
+        call_start = time.perf_counter()
         response = client.chat.completions.create(
             model=model,
             # Headroom for long list answers (e.g. "all papers by X" can be
@@ -270,10 +282,18 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
             extra_body=extra_body,
             **kwargs,
         )
+        log.info("llm_call", extra={"fields": {
+            "model": model, "round": round_num,
+            "duration_s": round(time.perf_counter() - call_start, 3),
+        }})
         msg = response.choices[0].message
 
         if not msg.tool_calls:
-            return msg.content or "", tool_log
+            elapsed = time.perf_counter() - start
+            log.info("answer_complete", extra={"fields": {
+                "model": model, "rounds": round_num + 1, "duration_s": round(elapsed, 3),
+            }})
+            return msg.content or "", tool_log, elapsed
 
         msgs.append({
             "role": "assistant",
@@ -297,7 +317,12 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
                 "content": result,
             })
 
-    return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log
+    elapsed = time.perf_counter() - start
+    return (
+        "Tool-call limit reached without a final answer — try rephrasing the question.",
+        tool_log,
+        elapsed,
+    )
 
 
 def _record_feedback(question: str, answer: str, model: str, category: str, text: str) -> None:
@@ -711,12 +736,15 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("Searching..."):
                 try:
-                    answer, tool_calls = _answer(client, model, api_msgs, extra=extra_kwargs)
+                    answer, tool_calls, elapsed = _answer(client, model, api_msgs, extra=extra_kwargs)
                 except Exception as exc:
                     answer = f"Error: {exc}"
                     tool_calls = []
+                    elapsed = None
 
             st.markdown(answer)
+            if elapsed is not None:
+                st.caption(f"⏱ {elapsed:.1f}s")
             if tool_calls:
                 with st.expander("Tools used", expanded=False):
                     for tc in tool_calls:
