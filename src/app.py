@@ -467,18 +467,15 @@ with tab_map:
         n_clusters = st.slider("Clusters", min_value=2, max_value=20, value=8)
         df = pd.DataFrame(_build_corpus_map(n_clusters))
 
-        query = st.text_input(
-            "Search papers",
-            placeholder="Type a title keyword (e.g. perovskite, MXene) to ring matching papers…",
-        ).strip()
-        titles = df["title"].tolist()
-        matches = [t for t in titles if query.lower() in t.lower()] if query else []
-        if query:
-            st.caption(
-                f"{len(matches)} paper{'s' if len(matches) != 1 else ''} matching "
-                f"“{query}” ringed below."
-                if matches else f"No papers match “{query}”."
-            )
+        # One bar that is both a scrollable list and a search: st.selectbox
+        # shows the full paper list on click and filters it as you type.
+        highlight = st.selectbox(
+            "Find a paper",
+            options=sorted(df["title"].tolist()),
+            index=None,
+            placeholder="Search or scroll the paper list…",
+        )
+        matches = [highlight] if highlight else []
 
         # Map each keyword-labeled cluster to a palette color. deck.gl's
         # OrthographicView has y pointing down, so negate y for a conventional
