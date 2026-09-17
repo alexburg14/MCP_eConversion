@@ -591,8 +591,13 @@ with tab_collab:
 # an iframe so its own click-to-trace interactivity works independently of
 # Streamlit; no API key needed, so render it before the chat tab's st.stop().
 with tab_pipeline:
+    st.caption(
+        "Every source, script, cache and tool behind the assistant, top to bottom "
+        "in the order data moves through them. Click a box to trace what it's built "
+        "from — all the way back to the raw sources — plus the one thing it directly produces."
+    )
     _pipeline_html = (Path(__file__).parent / "pipeline_map.html").read_text(encoding="utf-8")
-    components.html(_pipeline_html, height=1980, scrolling=True)
+    components.html(_pipeline_html, height=2000, scrolling=True)
 
 with tab_chat:
     _load_dotenv()
