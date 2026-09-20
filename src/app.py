@@ -178,6 +178,12 @@ Four collaboration-graph tools answer network questions that search cannot:
 - collaboration_centrality(): which PIs bridge otherwise-separate groups?
 - collaboration_communities(): which clusters of PIs work closely together?
 
+get_cluster_info(topic) answers questions about the cluster itself — its mission, the \
+research areas (RA 1-4 and which PIs belong to each), governance (executive board, cluster \
+office), and recent news — scraped from the website. Use it for "what does the cluster \
+research?", "what are the research areas?", "which area is X in?", "who runs e-conversion?", \
+"what's new?".
+
 When a question needs more than the abstract — specific methods, results, experimental \
 details, or exact numbers — call get_paper_fulltext(doi) on the most relevant paper(s) \
 from your search results before answering. Full text is cached for ~99% of the corpus; \

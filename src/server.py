@@ -22,6 +22,7 @@ CSV_PATH = _DATA_DIR / "sources" / "data_publication_dois.csv"
 FULLTEXT_CACHE_PATH = _DATA_DIR / "cache" / "fulltext_cache.json"
 PIS_CACHE_PATH = _DATA_DIR / "cache" / "pis_cache.json"
 PROPOSAL_FULLTEXT_PATH = _DATA_DIR / "cache" / "proposal_fulltext.md"
+CLUSTER_INFO_PATH = _DATA_DIR / "cache" / "cluster_info.json"
 
 mcp = FastMCP(get_config().cluster.display_name)
 
@@ -46,6 +47,7 @@ papers_by_doi = {p["doi"].lower(): p for p in papers}
 # (full text, PI profiles) rather than crashing the server.
 _FULLTEXTS: dict = safe_load_json(FULLTEXT_CACHE_PATH, "fulltext") or {}
 _PIS: list = safe_load_json(PIS_CACHE_PATH, "pis") or []
+_CLUSTER_INFO: dict = safe_load_json(CLUSTER_INFO_PATH, "cluster_info") or {}
 
 if PROPOSAL_FULLTEXT_PATH.exists():
     _PROPOSAL_FULLTEXT: str | None = PROPOSAL_FULLTEXT_PATH.read_text(encoding="utf-8")
@@ -64,6 +66,7 @@ CACHE_STATUS: dict = {
     "embeddings": {"available": semantic_search.is_available()},
     "graph": {"available": _graph.is_available()},
     "proposal": {"available": _PROPOSAL_FULLTEXT is not None},
+    "cluster_info": {"available": bool(_CLUSTER_INFO)},
 }
 
 log.info("caches loaded", extra={"fields": {k: v.get("count", v["available"]) for k, v in CACHE_STATUS.items()}})
@@ -232,6 +235,65 @@ def get_proposal_fulltext(
         "matches": len(scored),
         "results": [p for p, _ in scored[:5]],
     }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_cluster_info(
+    topic: Annotated[str, Field(description="Optional focus: a research area ('RA2', 'research areas'), a PI surname, 'board'/'governance', or 'news'. Omit for a general overview.")] = "",
+) -> str:
+    """Cluster-level facts scraped from the e-conversion website: the mission /
+    'about' text, the research areas (RA 1-4 with area coordinators and member
+    PIs), governance (executive board, cluster office), and recent news headlines.
+    Use for 'what does the cluster research?', 'what are the research areas?',
+    'which research area is X in?', 'who runs the cluster?', 'what's new?'. This is
+    cluster/organization info — for one PI's profile use get_pi; for papers use the
+    search tools."""
+    ci = _CLUSTER_INFO
+    if not ci:
+        return json.dumps({"error": "Cluster info not cached. Run: python src/scripts/build_cluster_info_cache.py"})
+    q = topic.strip().lower()
+    ras = ci.get("research_areas", [])
+
+    if not q:
+        return json.dumps({
+            "fetched_at": ci.get("fetched_at"),
+            "about": ci.get("about", "")[:1200],
+            "research_areas": [{"id": a["id"], "title": a["title"], "coordinators": a["coordinators"]} for a in ras],
+            "governance": {k: v[:300] for k, v in ci.get("governance", {}).items()},
+            "latest_news": [n["title"] for n in ci.get("news", [])[:8]],
+            "note": "Pass a topic (PI surname, 'RA2', 'board', 'news') to focus.",
+        }, indent=2, ensure_ascii=False)
+
+    # Topic aliases for whole sections.
+    if q in ("news", "latest", "recent", "events"):
+        return json.dumps({"fetched_at": ci.get("fetched_at"), "news": ci.get("news", [])}, indent=2, ensure_ascii=False)
+    if q in ("board", "governance", "executive board", "leadership", "office", "cluster office", "coordinators"):
+        return json.dumps({"fetched_at": ci.get("fetched_at"), "governance": ci.get("governance", {})}, indent=2, ensure_ascii=False)
+    if q in ("research areas", "areas", "research area", "ra", "topics"):
+        return json.dumps({"fetched_at": ci.get("fetched_at"), "research_areas": ras}, indent=2, ensure_ascii=False)
+
+    # Otherwise treat the topic as a keyword (PI surname, area title word, ...).
+    qf = _fold(q)
+    res: dict = {}
+    hit_ras = [a for a in ras if qf in _fold(" ".join([a["id"], a["title"]] + a["coordinators"] + a["members"]))
+               or qf.replace(" ", "") == a["id"].lower().replace(" ", "")]
+    if hit_ras:
+        res["research_areas"] = hit_ras
+    if qf in _fold(ci.get("about", "")):
+        res["about"] = ci["about"]
+    gov = {k: v for k, v in ci.get("governance", {}).items() if qf in _fold(v)}
+    if gov:
+        res["governance"] = gov
+    news = [n for n in ci.get("news", []) if qf in _fold(n["title"])]
+    if news:
+        res["news"] = news
+    if not res:
+        return json.dumps({
+            "message": f"No cluster-info section matched '{topic}'.",
+            "research_areas": [{"id": a["id"], "title": a["title"]} for a in ras],
+        }, indent=2, ensure_ascii=False)
+    res["fetched_at"] = ci.get("fetched_at")
+    return json.dumps(res, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
