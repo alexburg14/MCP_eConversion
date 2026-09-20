@@ -126,7 +126,7 @@ Separately, `config.toml`'s `[cluster]` table gained optional identity fields (`
 - ~~**BM25 is still lexical**~~ Resolved 2026-06-12: `semantic_search_papers` (BGE-small embeddings) covers conceptual/synonym queries as a parallel tool (see step 10).
 - **Single-user setup** — currently runs locally on one machine, not accessible cluster-wide
 - **Full-text coverage is near-complete** — 953/956 (99.7%) cached. Only 3 remain: two SPIE proceedings (10.1117/*, no OA/preprint) and one RSC paper (10.1039/d2cc03286d) whose supplied file is an HTML figure-viewer stub. A third pass (2026-09-17) recovered 6 papers that were on hand but mis-filed by ingest — three quarantined in `_unmatched/` under DOI-suffix-only names, one wrongly flagged `duplicate_` (its only copy), and two short Acta Cryst papers rejected by the 3000-char floor. Fix: `ingest_local_pdfs.py` now uses a 1500-char floor for real (parsed) PDFs and keeps 3000 for the HTML/trafilatura path, which is what actually guards against landing-page stubs.
-- **Full text is not yet wired into search** — `fulltext_cache.json` is populated but `search_papers` still searches only abstracts. Next step: either extend BM25 to full text or let the LLM call `get_paper_fulltext` for top candidates.
+- ~~**Full text is not yet wired into search**~~ Resolved 2026-09-17: the todo was "extend BM25 to full text OR let the LLM call `get_paper_fulltext` for top candidates" — the second route is live. `get_paper_fulltext(doi)` is a registered tool and the system prompt directs the agent to call it on the top search hits when an answer needs methods/results/exact numbers. `search_papers` still indexes only title+abstract; indexing full text into BM25 directly is now an optional enhancement, not a gap (see "What Comes Next").
 
 ---
 
@@ -140,7 +140,7 @@ Separately, `config.toml`'s `[cluster]` table gained optional identity fields (`
 - **Keep caches fresh**: run `build_abstracts_cache.py` and `build_pis_cache.py` when the website changes (the former also refreshes citation counts); rebuild `embeddings_cache.npz` after abstract refresh
 
 ### Medium term
-- **Wire full text into search**: currently `search_papers` only searches abstracts. Either extend BM25 to also index `fulltext_cache.json` (now 953 papers, avg ~40k chars each), or have the LLM call `get_paper_fulltext(doi)` for top-ranked abstract hits. With 138 of the new entries being PMC JATS-derived markdown (cleanly section-segmented), a `get_paper_section(doi, "methods")` tool becomes feasible.
+- **Deepen full-text use** (the LLM-call route already ships — see limitations): optionally index `fulltext_cache.json` (953 papers, avg ~40k chars each) into BM25 for direct lexical hits on body text, and/or add a `get_paper_section(doi, "methods")` tool — feasible since 138 entries are PMC JATS-derived markdown that is cleanly section-segmented.
 - **Migrate from JSON to a database**: SQLite is the natural first step (same format as the `.enl`). PostgreSQL when cluster-wide concurrent access is needed.
 - **PDF extractor upgrade**: PyMuPDF4LLM is sufficient for plain prose. For papers with complex layouts/equations/tables, upgrade to Marker (ML-based, surya models ~1-2GB) or MinerU (heaviest, best quality).
 
