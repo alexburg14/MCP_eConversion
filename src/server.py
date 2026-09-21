@@ -63,6 +63,13 @@ def _preload_semantic_model() -> None:
     """Load the sentence-transformer model at startup so the first chat
     request doesn't stall on a HF download inside the tool loop."""
     try:
+        # Import torch in the MAIN thread *before* spawning the preload thread.
+        # scipy's array-api compat probes sys.modules["torch"].Tensor; while
+        # another thread is mid-import that raises AttributeError ("partially
+        # initialized module 'torch'") and kills the whole app at import time
+        # (observed in E2E on 2026-09-21).
+        import torch  # noqa: F401
+
         import threading
         def _do() -> None:
             try:
