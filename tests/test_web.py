@@ -8,6 +8,7 @@ import sys
 import threading
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -236,6 +237,68 @@ def test_connect_success_and_failure(client, harness, monkeypatch):
     assert client.delete("/api/session/connect/elab").json()["active"] is False
     assert client.get("/api/session").json()["tools"]["total"] == 1
     assert client.post("/api/session/connect/nope", json={"token": "x"}).status_code == 404
+
+
+class FakeUpstream:
+    """Stands in for httpx.AsyncClient: records the one request, replays a canned answer."""
+
+    def __init__(self, status=200, content_type="text/html; charset=utf-8",
+                 text="<html>form</html>", raise_exc=None):
+        self.status, self.content_type, self.text, self.raise_exc = status, content_type, text, raise_exc
+        self.seen = []
+
+    def __call__(self, *a, **kw):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def request(self, method, url, content=None, headers=None):
+        self.seen.append({"method": method, "url": url, "content": content, "headers": headers})
+        if self.raise_exc:
+            raise self.raise_exc
+        return httpx.Response(self.status, headers={"content-type": self.content_type,
+                                                    "x-frame-options": "SAMEORIGIN",
+                                                    "set-cookie": "upstream=1"}, text=self.text)
+
+
+def test_register_proxy_mirrors_the_page_and_drops_the_framing_headers(client, monkeypatch):
+    fake = FakeUpstream(text="<html>register form</html>")
+    monkeypatch.setattr(web.httpx, "AsyncClient", fake)
+    r = client.get("/api/register/elab")
+    assert r.status_code == 200 and "register form" in r.text
+    assert "x-frame-options" not in r.headers and "set-cookie" not in r.headers
+    assert fake.seen[0]["url"] == web.SOURCES["elab"]["register_url"]
+
+
+def test_register_proxy_forwards_the_submitted_form(client, monkeypatch):
+    fake = FakeUpstream(status=401, text="<html>API key rejected</html>")
+    monkeypatch.setattr(web.httpx, "AsyncClient", fake)
+    r = client.post("/api/register/dt", content=b"api_key=secret",
+                    headers={"content-type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 401 and "rejected" in r.text
+    sent = fake.seen[0]
+    assert sent["method"] == "POST" and sent["content"] == b"api_key=secret"
+    assert sent["url"] == web.SOURCES["dt"]["register_url"]
+    assert sent["headers"]["content-type"] == "application/x-www-form-urlencoded"
+
+
+@pytest.mark.parametrize("fake", [
+    FakeUpstream(raise_exc=httpx.ConnectError("down")),
+    FakeUpstream(status=503, content_type="application/json", text="{}"),
+])
+def test_register_proxy_falls_back_to_a_new_tab_link(client, monkeypatch, fake):
+    monkeypatch.setattr(web.httpx, "AsyncClient", fake)
+    r = client.get("/api/register/elab")
+    assert r.status_code == 502
+    assert web.SOURCES["elab"]["register_url"] in r.text and "new tab" in r.text
+
+
+def test_register_proxy_rejects_an_unknown_source(client):
+    assert client.get("/api/register/nope").status_code == 404
 
 
 def test_two_sessions_are_isolated(state, harness):

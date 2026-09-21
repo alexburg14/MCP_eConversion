@@ -18,6 +18,7 @@ networkx
 openai
 fastapi
 uvicorn[standard]
-# tests (httpx also backs fastapi.testclient)
-pytest
+# mirrors the registration pages same-origin (web.py) and backs fastapi.testclient
 httpx
+# tests
+pytest

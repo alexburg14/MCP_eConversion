@@ -22,7 +22,8 @@ function openConnect(kind) {
   const conn = store.session.connected[kind];
   document.getElementById("connect-title").textContent = `Connect ${src.label}`;
   document.getElementById("connect-label").textContent = `${src.label} token`;
-  document.getElementById("connect-frame").src = src.register_url;
+  // Mirrored through the app: the upstream page refuses to be framed cross-origin.
+  document.getElementById("connect-frame").src = `api/register/${kind}`;
   document.getElementById("connect-link").href = src.register_url;
   document.getElementById("connect-token").value = "";
   document.getElementById("connect-error").hidden = true;
