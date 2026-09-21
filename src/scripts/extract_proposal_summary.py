@@ -1,10 +1,15 @@
-"""Extract the 'Summary of the Proposal' section from the e-conversion 2.0 proposal PDF.
+"""Extract the e-conversion 2.0 proposal PDF into markdown.
 
-Writes data/proposal_summary.md (~6 KB, ~1.5K tokens) for use as system-prompt context
-in the chat interface. Re-run only if the proposal PDF changes.
+Writes two outputs:
+- data/cache/proposal_summary.md — Section 2 ("Summary of the Proposal") only,
+  ~6 KB / ~1.5K tokens, used as system-prompt context in the chat interface.
+- data/cache/proposal_fulltext.md — the entire proposal, served by the
+  get_proposal_fulltext MCP tool so it's queryable like a paper's full text.
+
+Re-run only if the proposal PDF changes.
 
 Usage:
-    python src/extract_proposal_summary.py
+    python src/scripts/extract_proposal_summary.py
 """
 import re
 import sys
@@ -15,6 +20,7 @@ import pymupdf
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 PROPOSAL_PDF = _DATA_DIR / "sources" / "EXC_2089_e-conversion_A_Proposal_R.pdf"
 OUTPUT_MD = _DATA_DIR / "cache" / "proposal_summary.md"
+OUTPUT_FULLTEXT_MD = _DATA_DIR / "cache" / "proposal_fulltext.md"
 
 
 def _extract_full_text(pdf_path: Path) -> str:
@@ -51,6 +57,11 @@ def main() -> None:
         sys.exit(1)
 
     full = _extract_full_text(PROPOSAL_PDF)
+
+    fulltext = _clean(full)
+    OUTPUT_FULLTEXT_MD.write_text(fulltext, encoding="utf-8")
+    print(f"Wrote {OUTPUT_FULLTEXT_MD} ({len(fulltext)} chars, ~{len(fulltext) // 4} tokens)")
+
     summary = _clean(_slice_section_2(full))
     OUTPUT_MD.write_text(summary, encoding="utf-8")
     print(f"Wrote {OUTPUT_MD} ({len(summary)} chars, ~{len(summary) // 4} tokens)")

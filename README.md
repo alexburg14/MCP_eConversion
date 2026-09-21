@@ -6,7 +6,7 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 
 - **956 publications** scraped from `e-conversion.de/publikationen`
 - **953 abstracts (99.7% coverage)** cached locally — no API calls at search time
-- **402 full-text bodies (42.1% coverage)** cached locally, harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs, and HTML landing pages
+- **953 full-text bodies (99.7% coverage)** cached locally — 403 harvested from arXiv, PMC (NIH-deposited author manuscripts in JATS XML), institutional repositories, publisher PDFs and HTML landing pages, plus 550 supplied locally by collaborators via institutional access
 - **148 dataset links** (e.g. crystal structures in CSD/CCDC) attached to their parent papers
 - **42 PIs** scraped from `e-conversion.de/members/` with group, department, institution, research focus, application fields, and (where listed) their publication DOIs — links each PI to their papers in the cache
 - **Two-stage BM25 search** — searches titles first, falls back to abstracts when the abstract index scores higher (handles both precise and conceptual queries)
@@ -20,7 +20,8 @@ A local MCP (Model Context Protocol) server that exposes the e-conversion resear
 | `search_papers(query)` | Lexical (BM25) search — top 5 papers with titles, authors, year, abstracts, and any linked datasets. Best for exact terminology, acronyms, author names. `matched_on` (`title` / `abstract`) indicates which index fired. |
 | `semantic_search_papers(query)` | Semantic (embedding) search — top 5 papers ranked by cosine similarity over BGE-small embeddings. Best for conceptual queries where wording may differ from the abstracts. |
 | `get_paper_by_doi(doi)` | Direct lookup — returns full metadata and abstract for a single paper. When OpenAlex metadata is cached, includes the full author list, journal, and citation count. |
-| `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Only available for the ~42% of papers covered by the full-text cache. |
+| `get_paper_fulltext(doi)` | Returns cached full-text markdown for a single paper, with `source` (`pdf` / `html` / `pmc`), origin URL, char count, and fetch date. Available for the ~99% of papers covered by the full-text cache. |
+| `get_proposal_fulltext(query)` | Keyword search over the full text of the e-conversion 2.0 DFG proposal (~115K tokens, too large to return whole) — top 5 matching paragraphs. Omit `query` for the document's char count and opening paragraphs. Covers detail beyond the Section 2 summary already in the system prompt (work packages, PI roles, objectives). |
 | `search_nomad(elements, formula, author, text)` | Live search over the **public NOMAD** materials repository — external computed/experimental data, not cluster papers. Filters combine with AND. Text queries are relevance-ranked (`_score`), structured filters newest-first. Returns `total_matches` plus a sample. |
 | `search_pis(query)` | Keyword search across PI names, groups, research focus, and application fields. Returns the top 5 matching PIs with group, institution, research focus, and publication count. |
 | `get_pi(name)` | Profile lookup for a PI by last name, full name, or keyword. Returns full details plus up to 10 linked papers from the abstract cache. |
@@ -53,6 +54,20 @@ Adapting the assistant to a different research cluster is a matter of editing th
 one file; no Python changes are required. Publication and PI counts shown in the UI
 and system prompt are derived from the loaded caches, so they stay correct
 automatically.
+
+`[cluster]` also carries optional identity metadata (`cluster_id`, `funding_body`,
+`host_institutions`, `participating_institutions`) — for e-conversion these were
+scraped from e-conversion.de on 2026-09-04. They're injected into the system prompt
+and shown in the sidebar when set, and default to empty so a fork's `config.toml`
+doesn't need them.
+
+## Feedback
+
+The chat UI shows a "💬 Feedback" popover under each answer, for reporting a bug
+or leaving general feedback (free text, not a rating). Submissions are appended
+as JSONL to `data/feedback/feedback.jsonl` — question, answer, model, category,
+and text, one record per line — for later review. There's no external feedback
+service wired up; this is local-only, matching the single-user setup.
 
 ## Tests
 
@@ -139,13 +154,13 @@ python src/scripts/build_graph_cache.py
 
 Two PIs are linked iff they share a publication DOI (factual set intersection over `pis_cache.json`, no name disambiguation needed). Writes `data/cache/collaboration_graph.json`. Re-run only when `pis_cache.json` changes.
 
-**Proposal summary** — one-shot extraction of Section 2 of the e-conversion 2.0 DFG proposal, used as system-prompt context in the chat interface:
+**Proposal extraction** — one-shot extraction of the e-conversion 2.0 DFG proposal:
 
 ```bash
 python src/scripts/extract_proposal_summary.py
 ```
 
-Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/cache/proposal_summary.md` (~1.5K tokens). Re-run only if the proposal PDF changes.
+Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes two outputs: `data/cache/proposal_summary.md` (~1.5K tokens, Section 2 only, used as system-prompt context) and `data/cache/proposal_fulltext.md` (~115K tokens, the whole document, served keyword-searchable via the `get_proposal_fulltext` tool). Re-run only if the proposal PDF changes.
 
 ## Files
 
@@ -165,7 +180,7 @@ Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/cac
 | `src/scripts/ingest_local_pdfs.py` | Ingests the local `data/sources/pdfs/` (a collaborator's local full-texts) into `data/cache/fulltext_cache.json`, keyed by DOI |
 | `src/scripts/build_pis_cache.py` | Scrapes `e-conversion.de/members/` and individual staff pages into `data/cache/pis_cache.json` |
 | `src/scripts/build_graph_cache.py` | Builds the PI co-authorship graph into `data/cache/collaboration_graph.json` |
-| `src/scripts/extract_proposal_summary.py` | Extracts Section 2 of the e-conversion 2.0 proposal PDF into `data/cache/proposal_summary.md` |
+| `src/scripts/extract_proposal_summary.py` | Extracts the e-conversion 2.0 proposal PDF into `data/cache/proposal_summary.md` (Section 2) and `data/cache/proposal_fulltext.md` (whole document) |
 | `src/graph.py` | Loads `collaboration_graph.json` into networkx; backs the collaboration-graph tools |
 | `data/sources/data_publication_dois.csv` | *(source)* 956 papers + 148 dataset links |
 | `data/sources/e-conversion-Converted.enl` | *(source)* EndNote library (SQLite format) |
@@ -174,8 +189,9 @@ Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes `data/cac
 | `data/sources/pdfs/` | *(source)* Locally-supplied full-text PDFs (a collaborator's local full-texts), filenames encode the DOI; `_unmatched/` holds off-corpus and stub PDFs pending triage |
 | `data/cache/abstracts_cache.json` | One entry per DOI: abstract + OpenAlex authors / journal / citation_count |
 | `data/cache/embeddings_cache.npz` | Parallel `dois` + 384-d `vectors` arrays for semantic search |
-| `data/cache/fulltext_cache.json` | 852 full-text bodies keyed by DOI |
+| `data/cache/fulltext_cache.json` | 953 full-text bodies keyed by DOI (pdf 736 · pmc 138 · html 79) |
 | `data/cache/pis_cache.json` | 42 PIs keyed by smid (group, dept, institution, research focus, publication DOIs) |
 | `data/cache/collaboration_graph.json` | Node-link JSON of the PI co-authorship graph |
 | `data/cache/proposal_summary.md` | Section 2 of the proposal, extracted for chat-interface system context |
+| `data/cache/proposal_fulltext.md` | Whole proposal document, extracted for the `get_proposal_fulltext` search tool |
 | `.mcp.json` | Claude Code MCP server registration |

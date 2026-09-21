@@ -22,6 +22,12 @@ class ClusterConfig:
     display_name: str
     description: str
     website: str
+    # Optional identity metadata — default empty so a minimal config.toml (e.g. a
+    # fork for a different cluster) still loads without these.
+    cluster_id: str = ""
+    funding_body: str = ""
+    host_institutions: tuple[str, ...] = ()
+    participating_institutions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,10 @@ def get_config() -> Config:
     """Load and cache config.toml. Raises if the file or a required key is missing."""
     with open(_CONFIG_PATH, "rb") as f:
         raw = tomllib.load(f)
+    cluster_raw = dict(raw["cluster"])
+    for list_field in ("host_institutions", "participating_institutions"):
+        if list_field in cluster_raw:
+            cluster_raw[list_field] = tuple(cluster_raw[list_field])
     llm_raw = raw["llm"]
     providers_raw = llm_raw.get("providers", {})
     providers: dict[str, Provider] = {}
@@ -76,7 +86,7 @@ def get_config() -> Config:
             api_key_env=prov.get("api_key_env", "API_KEY"),
         )
     return Config(
-        cluster=ClusterConfig(**raw["cluster"]),
+        cluster=ClusterConfig(**cluster_raw),
         llm=_llm_from(llm_raw, "llm"),
         providers=providers,
     )

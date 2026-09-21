@@ -74,6 +74,7 @@ TARGETS: dict[str, Target] = {
         script="extract_proposal_summary.py",
         output="proposal_summary.md",
         inputs=("EXC_2089_e-conversion_A_Proposal_R.pdf",),
+        note="also writes proposal_fulltext.md",
     ),
 }
 

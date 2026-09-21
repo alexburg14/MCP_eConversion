@@ -11,30 +11,30 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent))
 import server  # loads all caches at import time
 import corpus_map
 from config import get_config
+from logging_config import configure_logging, get_logger
 import openai_tools
 import mcp_clients
 import telemetry
+
+configure_logging()  # idempotent; server import already did this
+log = get_logger("app")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CFG = get_config()
 
 BASE_URL = _CFG.llm.base_url
-
-# Tool calling verified against the live endpoint on 2026-06-12; the meeting
-# goal "mit welchen Modellen gut? Schlecht?" wants side-by-side comparison,
-# so the model is a sidebar choice rather than a constant.
-MODELS = list(_CFG.llm.models)
 
 # OpenRouter: dynamically fetch models that satisfy the account's guardrails
 # and cost under 1 EUR / M tokens (prompt AND completion). Falls back to the
@@ -141,11 +141,27 @@ telemetry.log_startup(
     tools_local=len(_TOOLS),
     tools_remote=0,
     providers=list((_CFG.providers or {})),
-    models=MODELS,
+    models=list(_CFG.llm.models),
 )
 
+
+def _cluster_identity_line() -> str:
+    """One-line cluster identity (funder, ID, institutions) if configured, else empty."""
+    parts = []
+    if _CFG.cluster.cluster_id:
+        parts.append(f"Cluster ID {_CFG.cluster.cluster_id}")
+    if _CFG.cluster.funding_body:
+        parts.append(f"funded by {_CFG.cluster.funding_body}")
+    if _CFG.cluster.host_institutions:
+        parts.append("hosted at " + " and ".join(_CFG.cluster.host_institutions))
+    if not parts:
+        return ""
+    return "\n\n" + "; ".join(parts) + "."
+
+
 _BASE_SYSTEM = f"""\
-You are a research assistant for {_CFG.cluster.description}.
+You are a research assistant for {_CFG.cluster.description}.\
+{_cluster_identity_line()}
 
 You have access to a local database of {len(server.papers)} cluster publications (with \
 abstracts and some full texts) and profiles of {len(server._PIS)} PIs. Use the tools to \
@@ -171,6 +187,11 @@ Four collaboration-graph tools answer network questions that search cannot:
 - collaboration_centrality(): which PIs bridge otherwise-separate groups?
 - collaboration_communities(): which clusters of PIs work closely together?
 
+When a question needs more than the abstract — specific methods, results, experimental \
+details, or exact numbers — call get_paper_fulltext(doi) on the most relevant paper(s) \
+from your search results before answering. Full text is cached for ~99% of the corpus; \
+if it comes back missing, say so and answer from the abstract.
+
 search_nomad queries the public NOMAD materials repository — data EXTERNAL to the \
 cluster, not e-conversion papers. Use it when asked whether computed or measured data \
 exists for a material, or what a PI has deposited. Report total_matches first; the \
@@ -186,6 +207,7 @@ Answer in the same language as the question (German or English).\
 """
 
 _PROPOSAL_SUMMARY_PATH = _REPO_ROOT / "data" / "cache" / "proposal_summary.md"
+_FEEDBACK_PATH = _REPO_ROOT / "data" / "feedback" / "feedback.jsonl"
 
 
 def _build_system_prompt() -> str:
@@ -239,12 +261,12 @@ def _remote_system_note() -> str:
     )
 
 
-def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str], dict]:
+def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str], float, dict]:
     """Run the tool-use loop.
 
-    Returns ``(answer_text, tool_calls_display, meta)``; ``meta`` carries the
-    rounds, per-tool-call metadata, token usage and error flag that the
-    per-turn telemetry line needs.
+    Returns (answer_text, tool_calls_summary, elapsed_seconds, meta); meta carries
+    rounds, per-tool-call metadata, token usage and the error flag the per-turn
+    telemetry line needs.
     """
     tool_log: list[str] = []
     tool_meta: list[dict] = []
@@ -253,6 +275,7 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
     error: str | None = None
     sys_content = _SYSTEM + _remote_system_note()
     msgs = [{"role": "system", "content": sys_content}] + list(messages)
+    start = time.perf_counter()
     # Tools are rebuilt per call: local + (session) remote tools. A user who
     # connects eLabFTW/DataTagger gets those tools; without a token this is
     # exactly the local-only list from before.
@@ -266,15 +289,22 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
         else:
             kwargs.update(extra)
 
-    for _round in range(1, _MAX_TOOL_ROUNDS + 1):
-        rounds = _round
+    for round_num in range(_MAX_TOOL_ROUNDS):
+        rounds = round_num + 1
+        call_start = time.perf_counter()
         response = client.chat.completions.create(
             model=model,
-            max_tokens=2048,
+            # Headroom for long list answers (e.g. "all papers by X" can be
+            # 30-40 items); 2048 truncated those mid-list.
+            max_tokens=8192,
             messages=msgs,
             extra_body=extra_body,
             **kwargs,
         )
+        log.info("llm_call", extra={"fields": {
+            "model": model, "round": round_num,
+            "duration_s": round(time.perf_counter() - call_start, 3),
+        }})
         msg = response.choices[0].message
         _usage = getattr(response, "usage", None)
         if _usage is not None:
@@ -283,8 +313,12 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
             usage_totals["total"] += int(getattr(_usage, "total_tokens", 0) or 0)
 
         if not msg.tool_calls:
+            elapsed = time.perf_counter() - start
+            log.info("answer_complete", extra={"fields": {
+                "model": model, "rounds": round_num + 1, "duration_s": round(elapsed, 3),
+            }})
             meta = {"rounds": rounds, "tools": tool_meta, "usage": usage_totals, "error": error}
-            return msg.content or "", tool_log, meta
+            return msg.content or "", tool_log, elapsed, meta
 
         msgs.append({
             "role": "assistant",
@@ -302,9 +336,9 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
                 args = {}
             _call_t0 = time.perf_counter()
             result = openai_tools.call_tool(tc.function.name, args)
-            _call_ms = (time.perf_counter() - _call_t0) * 1000
             _call_ok = not (isinstance(result, str) and result.lstrip().startswith('{"error"'))
-            tool_meta.append(telemetry.tool_call_meta(tc.function.name, args, _call_ms, _call_ok))
+            tool_meta.append(telemetry.tool_call_meta(
+                tc.function.name, args, (time.perf_counter() - _call_t0) * 1000, _call_ok))
             tool_log.append(f"`{tc.function.name}({(tc.function.arguments or '')[:80]})`")
             msgs.append({
                 "role": "tool",
@@ -312,13 +346,66 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
                 "content": result,
             })
 
+    elapsed = time.perf_counter() - start
     meta = {
         "rounds": rounds,
         "tools": tool_meta,
         "usage": usage_totals,
         "error": "tool_call_limit_reached",
     }
-    return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log, meta
+    return (
+        "Tool-call limit reached without a final answer — try rephrasing the question.",
+        tool_log,
+        elapsed,
+        meta,
+    )
+
+
+def _record_feedback(question: str, answer: str, model: str, category: str, text: str) -> None:
+    """Append one feedback record (bug report or general note on a question/answer pair) as JSONL.
+
+    Provenance fields (session/model/build) make a report traceable to the turn it
+    came from; the log line itself stays metadata-only.
+    """
+    _FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ver = telemetry.version_info()
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "provider": st.session_state.get("provider_label", ""),
+        "session": st.session_state.get("session_id", ""),
+        "git_sha": _ver["git_sha"],
+        "build_time": _ver["build_time"],
+        "question": question,
+        "answer": answer,
+        "category": category,
+        "text": text,
+    }
+    with open(_FEEDBACK_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    telemetry.log_feedback(
+        category=category,
+        session=st.session_state.get("session_id", ""),
+        model=model,
+        text_len=len(text),
+        question_len=len(question or ""),
+        answer_len=len(answer or ""),
+    )
+
+def _feedback_widget(key: str, question: str, answer: str, model: str) -> None:
+    """Popover to report a bug or leave general feedback on an assistant answer."""
+    with st.popover("💬 Feedback", key=key):
+        with st.form(key=f"{key}_form", clear_on_submit=True, border=False):
+            category = st.radio(
+                "Type", ["Bug report", "General feedback"], key=f"{key}_category", horizontal=True,
+            )
+            text = st.text_area("What happened, or what would you like to see?", key=f"{key}_text")
+            if st.form_submit_button("Submit"):
+                if text.strip():
+                    _record_feedback(question, answer, model, category, text.strip())
+                    st.success("Thanks — recorded.")
+                else:
+                    st.warning("Add a note before submitting.")
 
 
 def _tool_availability() -> dict:
@@ -329,9 +416,9 @@ def _tool_availability() -> dict:
         return {"local": 0, "elab": 0, "dt": 0, "total": 0}
     names = [t["function"]["name"] for t in tools]
     return {
-        "local": sum(1 for n in names if not n.startswith(("elab_", "dt_"))),
-        "elab": sum(1 for n in names if n.startswith("elab_")),
-        "dt": sum(1 for n in names if n.startswith("dt_")),
+        "local": sum(1 for x in names if not x.startswith(("elab_", "dt_"))),
+        "elab": sum(1 for x in names if x.startswith("elab_")),
+        "dt": sum(1 for x in names if x.startswith("dt_")),
         "total": len(names),
     }
 
@@ -354,8 +441,8 @@ def _coverage_table(snapshot: dict) -> pd.DataFrame:
         rows.append({
             "cache": name,
             "available": "yes" if entry.get("available") else "no",
-            "entries": "—" if entry.get("count") is None else str(entry["count"]),
-            "last built": (entry.get("last_built") or "—")[:19].replace("T", " "),
+            "entries": "\u2014" if entry.get("count") is None else str(entry["count"]),
+            "last built": (entry.get("last_built") or "\u2014")[:19].replace("T", " "),
         })
     return pd.DataFrame(rows)
 
@@ -363,6 +450,140 @@ def _coverage_table(snapshot: dict) -> pd.DataFrame:
 @st.cache_data(show_spinner="Computing corpus map (UMAP + clustering)...")
 def _build_corpus_map(n_clusters: int) -> list[dict]:
     return corpus_map.build_map(server.papers_by_doi, n_clusters=n_clusters)
+
+
+_COLLAB_GRAPH_PATH = _REPO_ROOT / "data" / "cache" / "collaboration_graph.json"
+
+
+@st.cache_data(show_spinner=False)
+def _build_collab_graph() -> dict | None:
+    """PI co-authorship graph shaped for the d3 force map: nodes with degree +
+    a short surname label, and undirected weighted links. None if not built."""
+    if not _COLLAB_GRAPH_PATH.exists():
+        return None
+    g = json.loads(_COLLAB_GRAPH_PATH.read_text(encoding="utf-8"))
+    deg: dict[str, int] = {}
+    for link in g["links"]:
+        deg[link["source"]] = deg.get(link["source"], 0) + 1
+        deg[link["target"]] = deg.get(link["target"], 0) + 1
+    nodes = [
+        {
+            "id": n["id"], "name": n["name"], "label": (n["name"].split() or [n["name"]])[-1],
+            "group": n.get("group", ""), "inst": n.get("institution", ""),
+            "papers": n.get("paper_count", 0), "deg": deg.get(n["id"], 0),
+        }
+        for n in g["nodes"]
+    ]
+    links = [{"source": l["source"], "target": l["target"], "weight": l["weight"]} for l in g["links"]]
+    return {"nodes": nodes, "links": links}
+
+
+# Corpus-map cluster colors: Tableau-20, saturated hues first so the common
+# small-cluster-count case gets the most distinguishable set. RGB triples.
+_CLUSTER_PALETTE = [
+    tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+    for h in (
+        "#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2",
+        "#EECA3B", "#B279A2", "#FF9DA6", "#9D755D", "#79706E",
+        "#9ECAE9", "#FFBF79", "#88D27A", "#FF9D98", "#83BCB6",
+        "#F2CF5B", "#D6A5C9", "#D67195", "#D8B5A5", "#BAB0AC",
+    )
+]
+
+# deck.gl scatter for the corpus map, rendered in a components.html iframe.
+# Streamlit's bundled pydeck can't drive an OrthographicView (its JSON path is
+# built for geospatial views and asserts), so we load deck.gl directly and get
+# GPU-crisp points with smooth scroll-zoom / drag-pan. __DATA__ / __MATCHES__
+# are filled per render. Uses OrthographicView so the UMAP plane maps 1:1 to
+# screen. __MATCHES__ is the list of titles matching the search box.
+_CORPUS_MAP_TEMPLATE = """
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  #deck-canvas { width: 100%; height: 100%; }
+  .dk-tip {
+    background: #1b1e26; color: #e9ebf0;
+    font: 12px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 6px 9px; border-radius: 6px; max-width: 340px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  }
+</style>
+<div id="wrap"><canvas id="deck-canvas"></canvas></div>
+<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.0.38/dist.min.js"></script>
+<script>
+  const DATA = __DATA__;
+  const MATCHES = new Set(__MATCHES__);
+  const { Deck, OrthographicView, ScatterplotLayer } = deck;
+  const wrap = document.getElementById("wrap");
+  const xs = DATA.map(d => d.x), ys = DATA.map(d => d.y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs);
+  const miny = Math.min(...ys), maxy = Math.max(...ys);
+  const W = wrap.clientWidth || 700, H = wrap.clientHeight || 540;
+  const zoom = Math.log2(0.85 * Math.min(
+    W / Math.max(maxx - minx, 1e-6), H / Math.max(maxy - miny, 1e-6)));
+
+  // A search rings every matching paper and frames the hits: a single hit gets
+  // its ~30-neighbor surroundings; several get a bounding-box fit. An empty
+  // search (or no matches) shows the whole corpus. All clamps keep us from
+  // zooming out past the full view or in absurdly far.
+  let viewTarget = [(minx + maxx) / 2, (miny + maxy) / 2, 0];
+  let viewZoom = zoom;
+  const hits = DATA.filter(d => MATCHES.has(d.title));
+  if (hits.length === 1) {
+    const sel = hits[0];
+    const dists = DATA
+      .map(d => Math.hypot(d.x - sel.x, d.y - sel.y))
+      .sort((a, b) => a - b);
+    const R = dists[Math.min(30, dists.length - 1)] || 1;
+    const zin = Math.log2(0.35 * Math.min(W, H) / Math.max(R, 1e-6));
+    viewTarget = [sel.x, sel.y, 0];
+    viewZoom = Math.min(Math.max(zin, zoom + 1), zoom + 5);
+  } else if (hits.length > 1) {
+    const hx = hits.map(d => d.x), hy = hits.map(d => d.y);
+    const nx = Math.min(...hx), Xx = Math.max(...hx);
+    const ny = Math.min(...hy), Xy = Math.max(...hy);
+    viewTarget = [(nx + Xx) / 2, (ny + Xy) / 2, 0];
+    const zfit = Math.log2(0.8 * Math.min(
+      W / Math.max(Xx - nx, 1e-6), H / Math.max(Xy - ny, 1e-6)));
+    viewZoom = Math.min(Math.max(zfit, zoom), zoom + 6);
+  }
+
+  function layers() {
+    const L = [new ScatterplotLayer({
+      id: "points", data: DATA,
+      getPosition: d => [d.x, d.y], getFillColor: d => d.color,
+      getRadius: 4, radiusUnits: "pixels", radiusMinPixels: 2.5, radiusMaxPixels: 9,
+      opacity: 0.85, pickable: true,
+      autoHighlight: true, highlightColor: [255, 255, 255, 140],
+    })];
+    if (MATCHES.size) {
+      L.push(new ScatterplotLayer({
+        id: "matched", data: hits,
+        getPosition: d => [d.x, d.y],
+        filled: false, stroked: true,
+        getLineColor: [255, 255, 255],
+        lineWidthUnits: "pixels", getLineWidth: 2,
+        lineWidthMinPixels: 2, lineWidthMaxPixels: 2,
+        getRadius: 12, radiusUnits: "pixels", radiusMinPixels: 12, radiusMaxPixels: 12,
+        pickable: false,
+      }));
+    }
+    return L;
+  }
+
+  new Deck({
+    canvas: "deck-canvas",
+    views: new OrthographicView({}),
+    controller: { scrollZoom: true, dragPan: true, doubleClickZoom: true },
+    initialViewState: { target: viewTarget, zoom: viewZoom },
+    layers: layers(),
+    getTooltip: ({ object }) => object && {
+      html: "<b>" + object.title + "</b><br/>" + object.year + " \\u00b7 " + object.cluster,
+      className: "dk-tip",
+    },
+  });
+</script>
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -378,15 +599,18 @@ st.caption(
     f"v{telemetry.version_info()['git_sha']}"
 )
 
-tab_chat, tab_map = st.tabs(["💬 Chat", "🗺️ Corpus Map"])
+tab_chat, tab_map, tab_collab, tab_pipeline = st.tabs(
+    ["💬 Chat", "🗺️ Corpus Map", "🤝 Collaboration", "🔧 Pipeline"]
+)
 
 # Corpus map only needs the embeddings cache, not the API key — render it
 # before the chat tab's st.stop() so a missing key doesn't hide it too.
 with tab_map:
     st.caption(
         "UMAP layout of the paper embeddings; KMeans clusters (computed in the "
-        "full 384-d space) labeled with their top title keywords. Hover a point "
-        "for title/year — a visual answer to 'which papers are near the one I'm reading?'"
+        "full 384-d space) labeled with their top title keywords. Scroll to zoom, "
+        "drag to pan, hover a point for its title — a visual answer to 'which "
+        "papers are near the one I'm reading?'"
     )
     if not corpus_map.is_available():
         st.info("Embeddings cache not built. Run: `python src/scripts/build_embeddings_cache.py`")
@@ -394,36 +618,82 @@ with tab_map:
         n_clusters = st.slider("Clusters", min_value=2, max_value=20, value=8)
         df = pd.DataFrame(_build_corpus_map(n_clusters))
 
+        # One bar that is both a scrollable list and a search: st.selectbox
+        # shows the full paper list on click and filters it as you type.
         highlight = st.selectbox(
-            "Highlight a paper (the one you're reading)",
-            options=[""] + sorted(df["title"].tolist()),
-            format_func=lambda t: t if t else "— none —",
+            "Find a paper",
+            options=sorted(df["title"].tolist()),
+            index=None,
+            placeholder="Search or scroll the paper list…",
+        )
+        matches = [highlight] if highlight else []
+
+        # Map each keyword-labeled cluster to a palette color. deck.gl's
+        # OrthographicView has y pointing down, so negate y for a conventional
+        # (y-up) orientation, then hand the points to the deck.gl iframe.
+        clusters = sorted(df["cluster"].unique())
+        cmap = {c: _CLUSTER_PALETTE[i % len(_CLUSTER_PALETTE)] for i, c in enumerate(clusters)}
+        records = [
+            {
+                "x": float(row.x), "y": -float(row.y),
+                "title": row.title, "year": str(row.year),
+                "cluster": row.cluster, "color": list(cmap[row.cluster]),
+            }
+            for row in df.itertuples()
+        ]
+        html = (
+            _CORPUS_MAP_TEMPLATE
+            .replace("__DATA__", json.dumps(records))
+            .replace("__MATCHES__", json.dumps(matches))
+        )
+        components.html(html, height=560, scrolling=False)
+
+        # deck.gl has no legend of its own — render one from the same cmap.
+        swatches = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:6px;'
+            f'margin:0 16px 6px 0;font-size:12px">'
+            f'<span style="width:11px;height:11px;border-radius:3px;'
+            f'background:rgb({r},{g},{b});display:inline-block"></span>{c}</span>'
+            for c, (r, g, b) in cmap.items()
+        )
+        st.markdown(
+            '<div style="opacity:.55;font-size:11px;margin-bottom:4px">'
+            "Cluster (top title keywords)</div>"
+            f'<div style="display:flex;flex-wrap:wrap">{swatches}</div>',
+            unsafe_allow_html=True,
         )
 
-        base = (
-            alt.Chart(df)
-            .mark_circle(size=45, opacity=0.65)
-            .encode(
-                x=alt.X("x:Q", axis=None),
-                y=alt.Y("y:Q", axis=None),
-                color=alt.Color(
-                    "cluster:N",
-                    legend=alt.Legend(title="Cluster (top title keywords)", labelLimit=280),
-                ),
-                tooltip=["title:N", "year:N", "doi:N", "cluster:N"],
-            )
+# Collaboration network: PI co-authorship graph (data/cache/collaboration_graph.json)
+# as a d3 force map. Same cache the collaboration_* tools query; no API key needed.
+with tab_collab:
+    st.caption(
+        "PI co-authorship network from the cluster's publications — nodes are PIs "
+        "(sized by number of collaborators, colored by institution), edges are shared "
+        "papers (thicker = more). Click a PI to isolate who they publish with."
+    )
+    _collab = _build_collab_graph()
+    if _collab is None:
+        st.info("Collaboration graph not built. Run: `python src/scripts/build_graph_cache.py`")
+    else:
+        _collab_html = (
+            (Path(__file__).parent / "collaboration_map.html").read_text(encoding="utf-8")
+            .replace("__NODES__", json.dumps(_collab["nodes"]))
+            .replace("__LINKS__", json.dumps(_collab["links"]))
         )
-        if highlight:
-            # Ring around the selected paper so its neighborhood is readable at a glance.
-            marker = (
-                alt.Chart(df[df["title"] == highlight])
-                .mark_point(shape="circle", size=400, strokeWidth=3, filled=False, color="red")
-                .encode(x="x:Q", y="y:Q", tooltip=["title:N", "year:N", "doi:N"])
-            )
-            chart = (base + marker).properties(height=600).interactive()
-        else:
-            chart = base.properties(height=600).interactive()
-        st.altair_chart(chart, width="stretch")
+        components.html(_collab_html, height=640, scrolling=False)
+
+# Pipeline map: a static, self-contained HTML lineage diagram of the whole
+# sources → build → caches → tools → registry → delivery pipeline. Rendered in
+# an iframe so its own click-to-trace interactivity works independently of
+# Streamlit; no API key needed, so render it before the chat tab's st.stop().
+with tab_pipeline:
+    st.caption(
+        "Every source, script, cache and tool behind the assistant, top to bottom "
+        "in the order data moves through them. Click a box to trace what it's built "
+        "from — all the way back to the raw sources — plus the one thing it directly produces."
+    )
+    _pipeline_html = (Path(__file__).parent / "pipeline_map.html").read_text(encoding="utf-8")
+    components.html(_pipeline_html, height=2000, scrolling=True)
 
 with tab_chat:
     _load_dotenv()
@@ -469,6 +739,7 @@ with tab_chat:
         st.sidebar.caption(f"Endpoint: {base_url}")
 
     # ---- Stats panel: what answered, on which data, in which build --------
+    st.session_state["provider_label"] = provider_label
     coverage_snapshot = _coverage_cached()
     tools_available = _tool_availability()
     _version = telemetry.version_info()
@@ -487,32 +758,32 @@ with tab_chat:
         st.markdown("**Data coverage**")
         st.dataframe(_coverage_table(coverage_snapshot), hide_index=True, width="stretch")
         _all = _stats_cached()
-        # The panel renders before the chat block, so make sure the session
-        # id/counters exist by now (otherwise it renders "session —").
         _sess = st.session_state.setdefault("session_id", telemetry.new_session_id())
         st.session_state.setdefault("turns", 0)
         st.session_state.setdefault("tool_calls_total", 0)
         st.markdown("**This session**")
         st.caption(
             f"{st.session_state.get('turns', 0)} turns · "
-            f"{st.session_state.get('tool_calls_total', 0)} tool calls · "
-            f"session `{_sess}`"
+            f"{st.session_state.get('tool_calls_total', 0)} tool calls · session `{_sess}`"
         )
         st.markdown("**All users** (from the server logs)")
         st.caption(
             f"{_all['turns']} turns · {_all['sessions']} sessions · {_all['error_turns']} errors · "
-            f"⌀ {_all['avg_latency_ms']} ms · {_all['reports']} problem reports"
+            f"⌀ {_all['avg_latency_ms']} ms · {_all['feedback']} feedback"
         )
         if _all["models"]:
             st.caption("Models: " + ", ".join(f"{k} ({v}×)" for k, v in _all["models"].items()))
         if _all["tools"]:
             st.caption("Tools: " + ", ".join(f"{k} ({v['calls']}×)" for k, v in list(_all["tools"].items())[:8]))
 
+
     if not api_key:
         st.error("Set the API key for this provider in your environment or in `.env` at the repo root and restart the app.")
         st.stop()
 
     client = OpenAI(api_key=api_key, base_url=base_url)
+    if _CFG.cluster.cluster_id:
+        st.sidebar.caption(_CFG.cluster.cluster_id)
 
     # ---- Remote data sources (eLabFTW / DataTagger), optional ----------
     # Tokens come from the user (BYOK, via the /el or /dt register pages).
@@ -586,16 +857,14 @@ with tab_chat:
     # Chat history in session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    # Anonymous session id + counters surfaced in the stats panel
-    if "session_id" not in st.session_state:
-        st.session_state["session_id"] = telemetry.new_session_id()
-        st.session_state["turns"] = 0
-        st.session_state["tool_calls_total"] = 0
 
     # Render history
-    for msg in st.session_state.messages:
+    for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if msg["role"] == "assistant" and i > 0:
+                question = st.session_state.messages[i - 1]["content"]
+                _feedback_widget(f"feedback_{i}", question, msg["content"], model)
 
     # Input
     if prompt := st.chat_input("Ask about papers, PIs, or research topics..."):
@@ -607,18 +876,18 @@ with tab_chat:
         api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
 
         with st.chat_message("assistant"):
-            _turn_t0 = time.perf_counter()
             with st.spinner("Searching..."):
                 try:
-                    answer, tool_calls, turn_meta = _answer(client, model, api_msgs, extra=extra_kwargs)
+                    answer, tool_calls, elapsed, turn_meta = _answer(client, model, api_msgs, extra=extra_kwargs)
                 except Exception as exc:
                     answer = f"Error: {exc}"
                     tool_calls = []
+                    elapsed = None
                     turn_meta = {"rounds": 0, "tools": [], "usage": {}, "error": type(exc).__name__}
-            _latency_ms = (time.perf_counter() - _turn_t0) * 1000
 
-            # Telemetry: exactly one privacy-safe line per turn. Hashes and
-            # lengths only -- the prompt/answer text never enters the log.
+            # Telemetry: exactly one privacy-safe line per turn (hashes and
+            # lengths only). Raw prompt/answer text never enters the log -- it is
+            # written only when the user submits the 💬 Feedback form.
             st.session_state["turns"] = st.session_state.get("turns", 0) + 1
             turn_no = st.session_state["turns"]
             st.session_state["tool_calls_total"] = (
@@ -636,65 +905,22 @@ with tab_chat:
                 prompt=prompt,
                 answer=answer,
                 usage=turn_meta.get("usage") or {},
-                latency_ms=_latency_ms,
+                latency_ms=(elapsed or 0) * 1000,
                 error=turn_meta.get("error"),
             )
 
             st.markdown(answer)
-            st.caption(
-                f"`{model}` · {turn_meta.get('rounds', 0)} round(s) · "
-                f"{len(turn_meta.get('tools') or [])} tool call(s) · {_latency_ms / 1000:.1f} s · "
-                f"session `{st.session_state['session_id']}` · v{telemetry.version_info()['git_sha']}"
-            )
+            if elapsed is not None:
+                st.caption(
+                    f"⏱ {elapsed:.1f}s · `{model}` · {turn_meta.get('rounds', 0)} round(s) · "
+                    f"{len(turn_meta.get('tools') or [])} tool call(s) · "
+                    f"session `{st.session_state['session_id']}` · "
+                    f"v{telemetry.version_info()['git_sha']}"
+                )
             if tool_calls:
                 with st.expander("Tools used", expanded=False):
                     for tc in tool_calls:
                         st.code(tc, language=None)
+            _feedback_widget(f"feedback_{len(st.session_state.messages)}", prompt, answer, model)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
-        st.session_state["turn_details"] = (st.session_state.get("turn_details") or []) + [{
-            "session": st.session_state["session_id"],
-            "turn": turn_no,
-            "provider": provider_label,
-            "model": model,
-            "base_url": base_url,
-            "prompt": prompt,
-            "answer": answer,
-            "tools": turn_meta.get("tools") or [],
-            "coverage": coverage_snapshot,
-        }]
-
-    # ---- "Report problem" -------------------------------------------------
-    # Deliberately OUTSIDE the chat_input block: a button click is a fresh
-    # rerun without a new prompt, so a button rendered inside that block would
-    # already be gone when it is clicked. Reads the last turn from session
-    # state -- the only place raw prompt/answer text is ever persisted.
-    _last_turns = (st.session_state.get("turn_details") or [])[-1:]
-    if _last_turns:
-        _stored = _last_turns[0]
-        with st.expander("🚩 Report a problem with the last answer", expanded=False):
-            st.caption(
-                "Sends the question, the answer and the tool calls of the last turn to the "
-                "server so it can be reproduced. Without this click nothing but lengths and "
-                "hashes are logged."
-            )
-            _report_comment = st.text_area(
-                "What went wrong? (optional)",
-                key=f"report_comment_{_stored['turn']}",
-                height=80,
-                placeholder="e.g. wrong paper cited, answer cut off, tool error…",
-            )
-            if st.button("Send report", key=f"report_send_{_stored['turn']}"):
-                _report_id = telemetry.write_report(
-                    session=_stored["session"],
-                    turn=_stored["turn"],
-                    comment=_report_comment,
-                    prompt=_stored["prompt"],
-                    answer=_stored["answer"],
-                    tools=_stored["tools"],
-                    provider=_stored["provider"],
-                    model=_stored["model"],
-                    base_url=_stored["base_url"],
-                    coverage_snapshot=_stored.get("coverage"),
-                )
-                st.success(f"Thanks — report `{_report_id}` saved (session {_stored['session']}).")

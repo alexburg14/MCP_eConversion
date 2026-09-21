@@ -21,6 +21,7 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CSV_PATH = _DATA_DIR / "sources" / "data_publication_dois.csv"
 FULLTEXT_CACHE_PATH = _DATA_DIR / "cache" / "fulltext_cache.json"
 PIS_CACHE_PATH = _DATA_DIR / "cache" / "pis_cache.json"
+PROPOSAL_FULLTEXT_PATH = _DATA_DIR / "cache" / "proposal_fulltext.md"
 
 mcp = FastMCP(get_config().cluster.display_name)
 
@@ -46,6 +47,14 @@ papers_by_doi = {p["doi"].lower(): p for p in papers}
 _FULLTEXTS: dict = safe_load_json(FULLTEXT_CACHE_PATH, "fulltext") or {}
 _PIS: list = safe_load_json(PIS_CACHE_PATH, "pis") or []
 
+if PROPOSAL_FULLTEXT_PATH.exists():
+    _PROPOSAL_FULLTEXT: str | None = PROPOSAL_FULLTEXT_PATH.read_text(encoding="utf-8")
+    _PROPOSAL_PARAGRAPHS: list[str] = [p.strip() for p in _PROPOSAL_FULLTEXT.split("\n\n") if p.strip()]
+else:
+    log.warning("cache missing", extra={"fields": {"cache": "proposal", "path": str(PROPOSAL_FULLTEXT_PATH)}})
+    _PROPOSAL_FULLTEXT = None
+    _PROPOSAL_PARAGRAPHS = []
+
 # Snapshot of every cache's state, surfaced by the status tool.
 CACHE_STATUS: dict = {
     "papers": {"available": bool(papers), "count": len(papers)},
@@ -54,6 +63,7 @@ CACHE_STATUS: dict = {
     "pis": {"available": bool(_PIS), "count": len(_PIS)},
     "embeddings": {"available": semantic_search.is_available()},
     "graph": {"available": _graph.is_available()},
+    "proposal": {"available": _PROPOSAL_FULLTEXT is not None},
 }
 
 log.info("caches loaded", extra={"fields": {k: v.get("count", v["available"]) for k, v in CACHE_STATUS.items()}})
@@ -136,6 +146,11 @@ def _query_tokens(query: str, min_len: int = 3) -> list[str]:
     ]
 
 
+def _score_text(text: str, tokens: list[str]) -> int:
+    words = set(re.findall(r"\w+", _fold(text)))
+    return sum(1 for t in tokens if t in words)
+
+
 def _score_pi(pi: dict, tokens: list[str]) -> int:
     words = _pi_words(pi)
     return sum(1 for t in tokens if t in words)
@@ -173,7 +188,8 @@ def get_paper_fulltext(
     doi: Annotated[str, Field(description="DOI of the paper")],
 ) -> str:
     """Return full text for a single paper by DOI, if available.
-    Full text is only available for open-access papers (~65% of the corpus)."""
+    Cached for ~99% of the corpus (953 of 956) — open-access harvest plus
+    locally-supplied PDFs — so it is worth trying for most DOIs."""
     doi = doi.strip().lower()
     entry = _FULLTEXTS.get(doi)
     if entry is None:
@@ -185,6 +201,43 @@ def get_paper_fulltext(
         "char_count": entry["char_count"],
         "fetched_at": entry["fetched_at"],
         "fulltext": entry["fulltext"],
+    }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_proposal_fulltext(
+    query: Annotated[str, Field(description="Keyword query to search within the proposal, e.g. 'work package 3' or 'PI roles'")] = "",
+) -> str:
+    """Search the full text of the e-conversion 2.0 DFG proposal (the cluster's funding
+    application) — far more detail than the Section 2 summary already in the system
+    prompt: individual work packages, PIs' roles, objectives, structure, etc.
+    The full document is ~115K tokens, too large to return whole, so this returns the
+    top 5 matching paragraphs for a keyword query. Omit the query to get the document's
+    total size and its opening paragraphs as an overview."""
+    if _PROPOSAL_FULLTEXT is None:
+        return json.dumps({"error": "Proposal full text not cached. Run: python build.py proposal"})
+    if not query or not query.strip():
+        return json.dumps({
+            "char_count": len(_PROPOSAL_FULLTEXT),
+            "note": "No query given — returning the opening paragraphs as an overview. Pass a query to search the full document.",
+            "excerpt": _PROPOSAL_PARAGRAPHS[:5],
+        }, indent=2, ensure_ascii=False)
+    tokens = _query_tokens(query)
+    if not tokens:
+        return json.dumps({"error": "Query contained no usable tokens (all were too short or stopwords)."})
+    scored = [(p, _score_text(p, tokens)) for p in _PROPOSAL_PARAGRAPHS]
+    scored = [(p, s) for p, s in scored if s > 0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    if not scored:
+        return json.dumps({
+            "char_count": len(_PROPOSAL_FULLTEXT),
+            "results": [],
+            "message": "No matching passages found.",
+        })
+    return json.dumps({
+        "char_count": len(_PROPOSAL_FULLTEXT),
+        "matches": len(scored),
+        "results": [p for p, _ in scored[:5]],
     }, indent=2, ensure_ascii=False)
 
 
@@ -489,6 +542,7 @@ _CACHE_PATHS = {
     "pis": PIS_CACHE_PATH,
     "embeddings": _DATA_DIR / "cache" / "embeddings_cache.npz",
     "graph": _DATA_DIR / "cache" / "collaboration_graph.json",
+    "proposal": PROPOSAL_FULLTEXT_PATH,
 }
 
 

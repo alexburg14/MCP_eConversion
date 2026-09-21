@@ -105,30 +105,6 @@ def test_tool_meta_hashes_args_by_default(isolated):
     assert meta["ms"] == 12
 
 
-def test_write_report_stores_raw_content_and_keeps_log_clean(isolated):
-    log_dir, report_dir = isolated
-    report_id = telemetry.write_report(
-        session="abcd1234", turn=1, comment="cites a paper that does not exist",
-        prompt=SECRET_PROMPT, answer=SECRET_ANSWER,
-        tools=[telemetry.tool_call_meta("search_papers", {"query": SECRET_PROMPT}, 5.0, True)],
-        provider="gwdg", model="qwen3.5-122b-a10b", base_url="https://chat-ai.academiccloud.de/v1",
-    )
-    report_file = report_dir / "reports.jsonl"
-    assert report_file.exists()
-    stored = json.loads(report_file.read_text(encoding="utf-8").strip().splitlines()[-1])
-    assert stored["report_id"] == report_id
-    assert stored["prompt"] == SECRET_PROMPT and stored["answer"] == SECRET_ANSWER
-    assert stored["comment"] == "cites a paper that does not exist"
-    assert "git_sha" in stored and "coverage" in stored
-
-    log_text = _log_text(log_dir)
-    assert SECRET_PROMPT not in log_text and SECRET_ANSWER not in log_text
-    parsed = json.loads([ln for ln in log_text.splitlines() if ln.strip()][-1])
-    assert parsed["msg"] == "problem reported"
-    assert parsed["report_id"] == report_id
-    assert parsed["comment_len"] == len("cites a paper that does not exist")
-
-
 def test_summarize_aggregates_turns(isolated):
     telemetry.log_turn(**_turn(turn=1, latency_ms=1000))
     telemetry.log_turn(**_turn(turn=2, latency_ms=3000, error="tool_call_limit_reached",
@@ -141,7 +117,7 @@ def test_summarize_aggregates_turns(isolated):
     assert summary["models"]["qwen3.5-122b-a10b"] == 2
     assert summary["tools"]["semantic_search_papers"]["calls"] == 1
     assert summary["tools"]["search_papers"]["errors"] == 1
-    assert summary["reports"] == 0
+    assert summary["feedback"] == 0
 
 
 def test_log_startup_logs_only_once(isolated):

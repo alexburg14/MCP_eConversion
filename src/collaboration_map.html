@@ -1,0 +1,187 @@
+<title>e-conversion Co-Authorship</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F4F6F8; --panel: #FFFFFF; --ink: #171B21; --ink-2: #454D57;
+    --muted: #6B7480; --faint: #9AA2AD; --hair: #E2E6EB; --hair-2: #CFD5DC; --edge: #C4CAD2;
+    --tum: #3B72B0; --lmu: #178A5E; --fhi: #C0803A; --mpi: #8A5FB0; --other: #97A0AA;
+    --shadow: 0 1px 2px rgba(20,24,30,.04), 0 12px 30px -16px rgba(20,24,30,.22);
+    --display: "Spectral", Georgia, "Times New Roman", serif;
+    --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0F1318; --panel: #171C22; --ink: #EAEDF1; --ink-2: #C0C7D0;
+      --muted: #8B94A0; --faint: #616B77; --hair: #262C34; --hair-2: #333B45; --edge: #3A4653;
+      --tum: #5E97D6; --lmu: #3FB183; --fhi: #D8A05A; --mpi: #B189DA; --other: #7E8994;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px -18px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F1318; --panel: #171C22; --ink: #EAEDF1; --ink-2: #C0C7D0;
+    --muted: #8B94A0; --faint: #616B77; --hair: #262C34; --hair-2: #333B45; --edge: #3A4653;
+    --tum: #5E97D6; --lmu: #3FB183; --fhi: #D8A05A; --mpi: #B189DA; --other: #7E8994;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.55 var(--body); -webkit-font-smoothing: antialiased; }
+  .page { max-width: 100%; margin: 0; padding: 4px 6px 8px; }
+
+  .eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  h1 { font: 500 33px/1.08 var(--display); letter-spacing: -.01em; margin: 10px 0 0; text-wrap: balance; }
+  h1 em { font-style: italic; color: var(--ink-2); }
+  .lede { color: var(--muted); font-size: 14.5px; margin: 9px 0 0; max-width: 62ch; }
+
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 20px 0 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .encodes { margin-left: auto; font-size: 12px; color: var(--faint); }
+  .encodes b { color: var(--ink-2); font-weight: 500; }
+
+  .frame { position: relative; margin-top: 12px; background: var(--panel); border: 1px solid var(--hair); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; height: 566px; min-height: 400px; }
+  #graph { width: 100%; height: 100%; display: block; cursor: grab; }
+  #graph.grab { cursor: grabbing; }
+  .link { stroke: var(--edge); fill: none; transition: stroke .12s, stroke-opacity .12s; }
+  .node { cursor: pointer; }
+  .node circle { stroke: var(--panel); stroke-width: 1.5; transition: opacity .14s; }
+  .lab { font: 400 10px/1 var(--body); fill: var(--muted); pointer-events: none; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; transition: opacity .14s; }
+  .node.dim circle, .node.dim .lab, .lab.dim { opacity: .12; }
+  .lab.on { fill: var(--ink); font-weight: 600; }
+  .hint { position: absolute; left: 14px; bottom: 12px; font-size: 11.5px; color: var(--faint); }
+  .reset { position: absolute; top: 12px; left: 12px; border: 1px solid var(--hair-2); background: var(--panel); color: var(--ink-2);
+    font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 8px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .15s; }
+  .reset.on { opacity: 1; pointer-events: auto; }
+
+  /* About-the-person card, top-right */
+  .card { position: absolute; top: 12px; right: 12px; width: 250px; background: var(--panel); border: 1px solid var(--hair-2);
+    border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); opacity: 0; transform: translateY(-4px); transition: opacity .14s, transform .14s; pointer-events: none; }
+  .card.on { opacity: 1; transform: none; }
+  .card .cinst { font: 500 11px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .card h3 { font: 500 19px/1.15 var(--display); margin: 5px 0 2px; }
+  .card .grp { font-size: 12.5px; color: var(--muted); }
+  .card .nums { display: flex; gap: 22px; margin: 11px 0 3px; }
+  .card .nums .n { font: 500 21px/1 var(--display); font-variant-numeric: tabular-nums; }
+  .card .nums .l { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .card h4 { font: 500 10.5px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--faint); margin: 13px 0 6px; }
+  .card ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .card li { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+  .card li .co { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card li .w { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .card .hintline { font-size: 11.5px; color: var(--faint); }
+  .foot { margin-top: 14px; font-size: 12px; color: var(--faint); }
+  @media (max-width: 640px) { .card { position: static; width: auto; margin: 12px; } .encodes { margin-left: 0; flex-basis: 100%; } }
+</style>
+
+<div class="page">
+  <div class="toolbar">
+    <div class="legend" id="legend"></div>
+    <div class="encodes"><b>dot size</b> = collaborators &middot; <b>line weight</b> = shared papers</div>
+  </div>
+
+  <div class="frame">
+    <svg id="graph"></svg>
+    <button class="reset" id="reset">Reset</button>
+    <div class="card" id="card"></div>
+    <div class="hint" id="hint"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+const NODES = __NODES__;
+const LINKS = __LINKS__;
+const INST = { TUM:{k:"tum",l:"TUM",n:"Technical University of Munich"}, LMU:{k:"lmu",l:"LMU",n:"Ludwig-Maximilians-Universität"},
+  FHI:{k:"fhi",l:"FHI",n:"Fritz Haber Institute"}, "MPI FKF":{k:"mpi",l:"MPI",n:"Max Planck Institute FKF"} };
+const instK = n => INST[n.inst] ? INST[n.inst].k : "other";
+const cssv = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const col = n => cssv("--" + instK(n));
+
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+NODES.forEach(n => n.co = []);
+LINKS.forEach(l => { byId[l.source].co.push({ id: l.target, w: l.weight }); byId[l.target].co.push({ id: l.source, w: l.weight }); });
+const adj = {}; NODES.forEach(n => adj[n.id] = new Set([n.id]));
+LINKS.forEach(l => { adj[l.source].add(l.target); adj[l.target].add(l.source); });
+const rOf = n => 5 + Math.sqrt(n.deg) * 3;
+const maxW = Math.max(...LINKS.map(l => l.weight), 1);
+const swOf = w => 0.7 + Math.sqrt(w / maxW) * 3.6;
+
+document.getElementById("hint").textContent = NODES.length + " PIs · " + LINKS.length + " collaborating pairs";
+const present = [...new Set(NODES.map(n => n.inst))];
+const legOrder = ["TUM","LMU","FHI","MPI FKF"].filter(i => present.includes(i));
+if (present.some(i => !INST[i])) legOrder.push("__o");
+document.getElementById("legend").innerHTML = legOrder.map(i => {
+  const k = INST[i] ? INST[i].k : "other", l = INST[i] ? INST[i].l : "Other";
+  return `<span><i style="background:var(--${k})"></i>${l}</span>`;
+}).join("");
+
+const frame = document.querySelector(".frame");
+const svg = d3.select("#graph");
+let W = frame.clientWidth, H = frame.clientHeight;
+svg.attr("viewBox", [0, 0, W, H]);
+const root = svg.append("g");
+const gL = root.append("g"), gN = root.append("g");
+
+const link = gL.selectAll("path").data(LINKS).join("path")
+  .attr("class", "link").attr("stroke-width", d => swOf(d.weight)).attr("stroke-opacity", .55);
+
+const node = gN.selectAll("g").data(NODES).join("g").attr("class", "node");
+node.append("circle").attr("r", rOf).attr("fill", d => d.deg ? col(d) : "var(--other)").attr("fill-opacity", d => d.deg ? 1 : .5);
+node.append("text").attr("class", "lab").attr("text-anchor", "middle").attr("dy", d => -rOf(d) - 4).text(d => d.label);
+node.call(d3.drag()
+  .on("start", (e, d) => { if (!e.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; svg.node().classList.add("grab"); })
+  .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+  .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; svg.node().classList.remove("grab"); }));
+
+const sim = d3.forceSimulation(NODES)
+  .force("link", d3.forceLink(LINKS).id(d => d.id).distance(d => 46 + 26 / Math.sqrt(d.weight)).strength(.28))
+  .force("charge", d3.forceManyBody().strength(-360))
+  .force("collide", d3.forceCollide().radius(d => rOf(d) + 8).strength(.9))
+  .force("center", d3.forceCenter(W / 2, H / 2))
+  .force("x", d3.forceX(W / 2).strength(.035)).force("y", d3.forceY(H / 2).strength(.05))
+  .on("tick", ticked);
+function ticked() {
+  link.attr("d", d => {
+    const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y, dr = Math.hypot(dx, dy) * 1.9;
+    return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+  });
+  node.attr("transform", d => `translate(${d.x},${d.y})`);
+}
+svg.call(d3.zoom().scaleExtent([.4, 4]).on("zoom", e => root.attr("transform", e.transform))).on("dblclick.zoom", null);
+
+const card = document.getElementById("card"), resetBtn = document.getElementById("reset");
+let pin = null;
+function apply(id) {
+  const near = id ? adj[id] : null;
+  node.classed("dim", d => id && !near.has(d.id));
+  node.select(".lab").classed("on", d => id && near.has(d.id));
+  link.classed("dim", d => id && d.source.id !== id && d.target.id !== id)
+      .attr("stroke", d => id && (d.source.id === id || d.target.id === id) ? col(byId[id]) : "var(--edge)")
+      .attr("stroke-opacity", d => !id ? .55 : (d.source.id === id || d.target.id === id ? .95 : .06));
+  resetBtn.classList.toggle("on", !!id);
+  if (id) showCard(id); else card.classList.remove("on");
+}
+node.on("mouseenter", (e, d) => { if (!pin) apply(d.id); })
+    .on("click", (e, d) => { e.stopPropagation(); pin = pin === d.id ? null : d.id; apply(pin); });
+svg.on("mouseleave", () => apply(pin));
+svg.on("click", () => { pin = null; apply(null); });
+resetBtn.addEventListener("click", () => { pin = null; apply(null); });
+
+function showCard(id) {
+  const n = byId[id], meta = INST[n.inst], c = col(n);
+  const tops = [...n.co].sort((a, b) => b.w - a.w).slice(0, 5)
+    .map(x => `<li><span class="co">${byId[x.id].name.replace(/^(Prof\.|Dr\.|Prof\. Dr\.)\s*/, "")}</span><span class="w">${x.w} paper${x.w === 1 ? "" : "s"}</span></li>`).join("");
+  card.innerHTML = `<div class="cinst" style="color:${c}">${meta ? meta.l + " · " + meta.n : (n.inst || "—")}</div>
+    <h3>${n.name}</h3><div class="grp">${n.group || "—"}</div>
+    <div class="nums"><div><div class="n" style="color:${c}">${n.deg}</div><div class="l">collaborator${n.deg === 1 ? "" : "s"}</div></div>
+      <div><div class="n">${n.papers}</div><div class="l">papers</div></div></div>
+    ${n.deg ? `<h4>Most shared with</h4><ul>${tops}</ul>` : `<div class="hintline">No co-authorships recorded in the corpus.</div>`}`;
+  card.classList.add("on");
+}
+// settle the layout before first paint so it opens at rest, not mid-jitter
+for (let i = 0; i < 260; i++) sim.tick();
+ticked();
+addEventListener("resize", () => { W = frame.clientWidth; H = frame.clientHeight; svg.attr("viewBox", [0, 0, W, H]); sim.force("center", d3.forceCenter(W / 2, H / 2)).alpha(.2).restart(); });
+</script>

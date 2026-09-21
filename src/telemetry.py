@@ -25,8 +25,8 @@ from logging_config import get_logger, log_dir
 log = get_logger("chat")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-REPORT_DIR = Path(os.environ.get("REPORT_DIR") or (_REPO_ROOT / "reports"))
-REPORT_FILE = REPORT_DIR / "reports.jsonl"
+FEEDBACK_FILE = Path(os.environ.get("FEEDBACK_FILE") or
+                     (_REPO_ROOT / "data" / "feedback" / "feedback.jsonl"))
 LOG_TOOL_ARGS = os.environ.get("LOG_TOOL_ARGS", "0").strip().lower() not in ("", "0", "false", "no")
 
 _startup_logged = False
@@ -148,47 +148,6 @@ def log_turn(**kwargs) -> dict:
     return record
 
 
-def write_report(*, session, turn, comment, prompt, answer, tools, provider,
-                 model, base_url, coverage_snapshot=None, extra=None) -> str:
-    """Store a user-submitted problem report WITH the raw turn content.
-
-    The single place raw prompts/answers are persisted; runs only on an explicit
-    user action ("Report problem"). The log line itself stays content-free.
-    """
-    report_id = uuid.uuid4().hex[:8]
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    record = {
-        "report_id": report_id,
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "session": session,
-        "turn": turn,
-        "comment": comment or "",
-        "provider": provider,
-        "model": model,
-        "base_url": base_url,
-        "prompt": prompt or "",
-        "answer": answer or "",
-        "tools": tools or [],
-        "coverage": coverage_snapshot if coverage_snapshot is not None else coverage(),
-        **version_info(),
-    }
-    if extra:
-        record.update(extra)
-    with REPORT_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-    log.info("problem reported", extra={"fields": {
-        "report_id": report_id,
-        "session": session,
-        "turn": turn,
-        "comment_len": len(comment or ""),
-        "prompt_len": len(prompt or ""),
-        "answer_len": len(answer or ""),
-        "tools_used": len(tools or []),
-        **version_info(),
-    }})
-    return report_id
-
-
 def _log_files() -> list[Path]:
     """Current log plus its rotations, oldest first."""
     directory = log_dir()
@@ -217,7 +176,16 @@ def read_turns(limit: int = 20000) -> list[dict]:
     return out[-limit:]
 
 
-def count_reports() -> int:
+def log_feedback(*, category: str, session: str, model: str,
+                 text_len: int, question_len: int, answer_len: int) -> None:
+    # The raw question/answer live in the feedback store; this line is metadata only.
+    log.info("feedback", extra={"fields": {
+        "category": category, "session": session, "model": model,
+        "text_len": text_len, "question_len": question_len, "answer_len": answer_len,
+        **version_info()}})
+
+
+def count_feedback() -> int:
     if not REPORT_FILE.exists():
         return 0
     try:
@@ -266,5 +234,5 @@ def summarize(turns: list[dict] | None = None) -> dict:
         "models": models,
         "providers": providers,
         "tools": dict(sorted(tools.items(), key=lambda kv: -kv[1]["calls"])),
-        "reports": count_reports(),
+        "feedback": count_feedback(),
     }
