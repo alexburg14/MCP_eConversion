@@ -392,22 +392,6 @@ def _record_feedback(question: str, answer: str, model: str, category: str, text
         answer_len=len(answer or ""),
     )
 
-def _feedback_widget(key: str, question: str, answer: str, model: str) -> None:
-    """Popover to report a bug or leave general feedback on an assistant answer."""
-    with st.popover("💬 Feedback", key=key):
-        with st.form(key=f"{key}_form", clear_on_submit=True, border=False):
-            category = st.radio(
-                "Type", ["Bug report", "General feedback"], key=f"{key}_category", horizontal=True,
-            )
-            text = st.text_area("What happened, or what would you like to see?", key=f"{key}_text")
-            if st.form_submit_button("Submit"):
-                if text.strip():
-                    _record_feedback(question, answer, model, category, text.strip())
-                    st.success("Thanks — recorded.")
-                else:
-                    st.warning("Add a note before submitting.")
-
-
 def _tool_availability() -> dict:
     """How many tools the model is offered in this session (local + remote)."""
     try:
@@ -590,22 +574,97 @@ _CORPUS_MAP_TEMPLATE = """
 # Streamlit UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title=_CFG.cluster.display_name, page_icon="⚡", layout="centered")
-st.title(f"⚡ {_CFG.cluster.display_name}")
-_COVERAGE = telemetry.coverage()
-st.caption(
-    f"{len(server.papers)} publications · {len(server._PIS)} PIs · "
-    f"{_COVERAGE.get('fulltext', {}).get('count', 0)} full texts · "
-    f"v{telemetry.version_info()['git_sha']}"
-)
 
-tab_chat, tab_map, tab_collab, tab_pipeline = st.tabs(
-    ["💬 Chat", "🗺️ Corpus Map", "🤝 Collaboration", "🔧 Pipeline"]
-)
+APP_TITLE = "e-Converse"
+_PAGE_ICON = "⚡"
 
-# Corpus map only needs the embeddings cache, not the API key — render it
-# before the chat tab's st.stop() so a missing key doesn't hide it too.
-with tab_map:
+# Clickable starters shown while the conversation is empty.
+_EXAMPLES = [
+    "Which papers cover perovskite stability?",
+    "Who works on electrocatalysis?",
+    "Which PIs bridge institutions?",
+    "NOMAD data for battery materials",
+]
+
+
+def _stats_for_nerds() -> str:
+    """Everything technical, behind the ⋮ menu -> About (nothing on the chat page)."""
+    cov = telemetry.coverage()
+    stats = telemetry.summarize()
+    ver = telemetry.version_info()
+
+    def n(name: str) -> object:
+        return cov.get(name, {}).get("count", 0)
+
+    def built(name: str) -> str:
+        return str(cov.get(name, {}).get("last_built") or "—")[:19].replace("T", " ")
+
+    def ok(name: str) -> str:
+        return "yes" if cov.get(name, {}).get("available") else "no"
+
+    build = ver["git_sha"] + (f" ({ver['build_time']})" if ver.get("build_time") else "")
+    tool_rows = "".join(
+        f"\n| {name} | {info['calls']} | {info['errors']} | {info['avg_ms']} ms |"
+        for name, info in list(stats["tools"].items())[:12]
+    ) or "\n| _none yet_ | | | |"
+    model_rows = "".join(
+        f"\n| {name} | {count} |" for name, count in stats["models"].items()
+    ) or "\n| _none yet_ | |"
+    return "\n".join([
+        f"### Stats for nerds",
+        "",
+        f"**Build** `{build}` · providers: {', '.join(_CFG.providers or {})} · "
+        f"default model `{_CFG.llm.default_model}`",
+        "",
+        "**Pipeline** (sources → caches → tools)",
+        "",
+        "| stage | entries | built |",
+        "| --- | --- | --- |",
+        f"| papers (DOI csv) | {n('papers')} | {built('papers')} |",
+        f"| abstracts | {n('abstracts')} | {built('abstracts')} |",
+        f"| full texts | {n('fulltext')} | {built('fulltext')} |",
+        f"| PI profiles | {n('pis')} | {built('pis')} |",
+        f"| embeddings | {ok('embeddings')} | {built('embeddings')} |",
+        f"| collaboration graph | {ok('graph')} | {built('graph')} |",
+        "",
+        "**Usage** (from the server logs)",
+        "",
+        f"{stats['turns']} turns · {stats['sessions']} sessions · {stats['error_turns']} errors · "
+        f"⌀ {stats['avg_latency_ms']} ms · {stats['feedback']} feedback",
+        "",
+        "| tool | calls | errors | avg |",
+        "| --- | --- | --- | --- |" + tool_rows,
+        "",
+        "| model | turns |",
+        "| --- | --- |" + model_rows,
+        "",
+        f"Full pipeline map: the **Pipeline** page · full text search tools: {_tool_inventory_text()}",
+    ])
+
+
+def _tool_inventory_text() -> str:
+    local = len(openai_tools.build_openai_tools())
+    bits = [f"{local} local"]
+    if st.session_state.get("elab_token"):
+        bits.append(f"{st.session_state.get('elab_tools', 0)} eLabFTW")
+    if st.session_state.get("dt_token"):
+        bits.append(f"{st.session_state.get('dt_tools', 0)} DataTagger")
+    return " · ".join(bits)
+
+
+def _page_setup() -> None:
+    """Load .env, then configure the page. Numbers live in ⋮ → About, not in the chat."""
+    _load_dotenv()
+    st.set_page_config(
+        page_title=APP_TITLE,
+        page_icon=_PAGE_ICON,
+        layout="centered",
+        menu_items={"About": _stats_for_nerds()},
+    )
+
+
+def _view_corpus_map() -> None:
+    """UMAP layout of the paper embeddings (deck.gl, searchable)."""
     st.caption(
         "UMAP layout of the paper embeddings; KMeans clusters (computed in the "
         "full 384-d space) labeled with their top title keywords. Scroll to zoom, "
@@ -665,7 +724,10 @@ with tab_map:
 
 # Collaboration network: PI co-authorship graph (data/cache/collaboration_graph.json)
 # as a d3 force map. Same cache the collaboration_* tools query; no API key needed.
-with tab_collab:
+
+
+def _view_collaboration() -> None:
+    """PI co-authorship network (interactive force graph)."""
     st.caption(
         "PI co-authorship network from the cluster's publications — nodes are PIs "
         "(sized by number of collaborators, colored by institution), edges are shared "
@@ -686,7 +748,10 @@ with tab_collab:
 # sources → build → caches → tools → registry → delivery pipeline. Rendered in
 # an iframe so its own click-to-trace interactivity works independently of
 # Streamlit; no API key needed, so render it before the chat tab's st.stop().
-with tab_pipeline:
+
+
+def _view_pipeline() -> None:
+    """Cluster research pipeline map."""
     st.caption(
         "Every source, script, cache and tool behind the assistant, top to bottom "
         "in the order data moves through them. Click a box to trace what it's built "
@@ -695,232 +760,315 @@ with tab_pipeline:
     _pipeline_html = (Path(__file__).parent / "pipeline_map.html").read_text(encoding="utf-8")
     components.html(_pipeline_html, height=2000, scrolling=True)
 
-with tab_chat:
-    _load_dotenv()
 
-    # Provider selection: default provider first, then any additional ones
-    # defined in config.toml under [llm.providers].
+_SOURCES = {
+    "elab": ("eLabFTW", "https://researchmcp.duckdns.org/el/register"),
+    "dt": ("DataTagger", "https://researchmcp.duckdns.org/dt/register"),
+}
+
+
+def _chat_placeholder() -> str:
+    return (f"Ask about {len(server.papers)} papers across {len(server._PIS)} PIs/groups "
+            f"in the cluster…")
+
+
+def _resolve_llm() -> dict:
+    """Provider + model from the session (chosen in the bottom bar). No widgets here."""
     providers = _CFG.providers or {}
-    provider_names = list(providers.keys()) if providers else []
-    provider = None
-    if provider_names:
-        default_provider = next((n for n, p in providers.items() if p.base_url == _CFG.llm.base_url), provider_names[0])
-        provider_name = st.sidebar.selectbox("Provider", provider_names, index=provider_names.index(default_provider))
-        provider_label = provider_name
-        provider = providers[provider_name]
-        base_url = provider.base_url
-        default_model = provider.default_model
-        api_key = os.environ.get(provider.api_key_env, "")
-        extra_kwargs: dict | None = None
-        # OpenRouter: no manual model/provider choice. Auto-pick the cheapest
-        # model that satisfies the account's guardrails and costs < 1 EUR/Mtok
-        # (in and out), and let OpenRouter route to the cheapest provider.
-        if "openrouter" in base_url:
-            cheapest, _all = _fetch_openrouter_models(api_key) if api_key else ([], [])
-            if cheapest:
-                model = cheapest[0]
-                # NOTE: no provider routing / zdr flag — it made OpenRouter return
-                # empty answers and slow requests. Guardrails (incl. any ZDR
-                # policy) are enforced server-side via /models/user already.
-                extra_kwargs = None
-                st.sidebar.caption(f"Endpoint: {base_url} · auto: cheapest (guardrails, agentic≥35, tools, <1€/Mtok)")
-            else:
-                model = default_model
-                st.sidebar.caption(f"Endpoint: {base_url} · static default (fetch failed, no key, or no match)")
+    names = list(providers)
+    default_provider = next(
+        (x for x, p in providers.items() if p.base_url == _CFG.llm.base_url), names[0] if names else "default"
+    )
+    provider_name = st.session_state.get("provider_name") or default_provider
+    if provider_name not in providers:
+        provider_name = default_provider
+    st.session_state["provider_name"] = provider_name
+    prov = providers.get(provider_name)
+    if prov is None:
+        return {"provider": "default", "base_url": BASE_URL, "model": _CFG.llm.default_model,
+                "api_key": os.environ.get("API_KEY", ""), "extra": None}
+    models = list(prov.models) or [prov.default_model]
+    api_key = os.environ.get(prov.api_key_env, "")
+    chosen = st.session_state.get("model_name")
+    if "openrouter" in prov.base_url:
+        if chosen in models:
+            model = chosen
         else:
-            model = default_model
-            st.sidebar.caption(f"Endpoint: {base_url}")
+            cheapest, _all = _fetch_openrouter_models(api_key) if api_key else ([], [])
+            model = cheapest[0] if cheapest else prov.default_model
     else:
-        base_url = BASE_URL
-        default_model = _CFG.llm.default_model
-        model = default_model
-        api_key = os.environ.get("API_KEY", "")
-        provider_label = "default"
-        st.sidebar.caption(f"Endpoint: {base_url}")
-
-    # ---- Stats panel: what answered, on which data, in which build --------
-    st.session_state["provider_label"] = provider_label
-    coverage_snapshot = _coverage_cached()
-    tools_available = _tool_availability()
-    _version = telemetry.version_info()
-    with st.sidebar.expander("📊 Stats & version", expanded=False):
-        st.caption(f"Model `{model}` · provider {provider_label}")
-        st.caption(f"Endpoint {base_url}")
-        _vline = f"Version `{_version['git_sha']}`"
-        if _version.get("build_time"):
-            _vline += f" · built {_version['build_time']}"
-        st.caption(_vline)
-        st.caption(
-            f"Tools offered: {tools_available['total']} "
-            f"({tools_available['local']} local · {tools_available['elab']} eLabFTW "
-            f"· {tools_available['dt']} DataTagger)"
-        )
-        st.markdown("**Data coverage**")
-        st.dataframe(_coverage_table(coverage_snapshot), hide_index=True, width="stretch")
-        _all = _stats_cached()
-        _sess = st.session_state.setdefault("session_id", telemetry.new_session_id())
-        st.session_state.setdefault("turns", 0)
-        st.session_state.setdefault("tool_calls_total", 0)
-        st.markdown("**This session**")
-        st.caption(
-            f"{st.session_state.get('turns', 0)} turns · "
-            f"{st.session_state.get('tool_calls_total', 0)} tool calls · session `{_sess}`"
-        )
-        st.markdown("**All users** (from the server logs)")
-        st.caption(
-            f"{_all['turns']} turns · {_all['sessions']} sessions · {_all['error_turns']} errors · "
-            f"⌀ {_all['avg_latency_ms']} ms · {_all['feedback']} feedback"
-        )
-        if _all["models"]:
-            st.caption("Models: " + ", ".join(f"{k} ({v}×)" for k, v in _all["models"].items()))
-        if _all["tools"]:
-            st.caption("Tools: " + ", ".join(f"{k} ({v['calls']}×)" for k, v in list(_all["tools"].items())[:8]))
+        model = chosen if chosen in models else prov.default_model
+    return {"provider": provider_name, "base_url": prov.base_url, "model": model,
+            "api_key": api_key, "extra": None}
 
 
-    if not api_key:
-        st.error("Set the API key for this provider in your environment or in `.env` at the repo root and restart the app.")
+def _sync_remote_clients() -> None:
+    """Hand the session's tokens to the running MCP proxies (no tokens -> local tools only)."""
+    rc = mcp_clients.RemoteClients(
+        elab_token=st.session_state.get("elab_token") or None,
+        dt_token=st.session_state.get("dt_token") or None,
+    )
+    openai_tools.set_remote_clients(rc)
+
+
+def _connect_body(kind: str) -> None:
+    """Registration page embedded + token field: configure without leaving the app."""
+    label, url = _SOURCES[kind]
+    st.caption(f"Register {label} below — you stay inside the app. Then paste the token.")
+    try:
+        st.iframe(url, height=430)
+    except Exception:  # noqa: BLE001 -- older/newer API fallback
+        components.iframe(url, height=430, scrolling=True)
+    token = st.text_input(f"{label} token", type="password", key=f"{kind}_token_input",
+                          placeholder="Paste the token from the form above")
+    c1, c2 = st.columns(2)
+    if c1.button("Connect", type="primary", key=f"connect_{kind}"):
+        st.session_state[f"{kind}_token"] = (token or "").strip()
+        _sync_remote_clients()
+        try:
+            found = sum(1 for t in openai_tools.build_chat_tools()
+                        if t["function"]["name"].startswith(kind + "_")
+                        and "unavailable" not in t["function"]["name"])
+        except Exception:  # noqa: BLE001
+            found = 0
+        st.session_state[f"{kind}_tools"] = found
+        if found:
+            st.toast(f"{label}: connected ({found} tools)", icon="🟢")
+        else:
+            st.error(f"{label}: token invalid or expired — register a new one above.")
+        st.rerun()
+    if c2.button("Disconnect", key=f"disconnect_{kind}"):
+        st.session_state[f"{kind}_token"] = ""
+        st.session_state[f"{kind}_tools"] = 0
+        _sync_remote_clients()
+        st.toast(f"{label} disconnected", icon="⚪")
+        st.rerun()
+
+
+@st.dialog("Connect eLabFTW", width="large")
+def _dialog_elab() -> None:
+    _connect_body("elab")
+
+
+@st.dialog("Connect DataTagger", width="large")
+def _dialog_dt() -> None:
+    _connect_body("dt")
+
+
+def _source_chip(kind: str) -> None:
+    """Grey when not connected, green when the source is live. Click opens its setup."""
+    label, _url = _SOURCES[kind]
+    active = bool(st.session_state.get(f"{kind}_token"))
+    count = st.session_state.get(f"{kind}_tools", 0)
+    dot = "🟢" if active else "⚪"
+    hint = (f"connected — {count} tools available" if active
+            else "not connected — click to register and paste a token")
+    if st.button(f"{dot} {label}", key=f"chip_{kind}", help=hint, width="stretch"):
+        (_dialog_elab if kind == "elab" else _dialog_dt)()
+
+
+def _model_popover(llm: dict) -> None:
+    """One line with the current choice; clicking lists the models grouped by provider."""
+    with st.popover(f"{llm['provider']} / {llm['model']}", width="stretch",
+                    help="Switch provider or model"):
+        for name, prov in (_CFG.providers or {}).items():
+            st.markdown(f"**{name}**")
+            for m in (list(prov.models) or [prov.default_model]):
+                picked = (name == st.session_state.get("provider_name")
+                          and m == st.session_state.get("model_name"))
+                if st.button(("✓ " if picked else "") + m, key=f"pick_{name}_{m}",
+                             width="stretch"):
+                    st.session_state["provider_name"] = name
+                    st.session_state["model_name"] = m
+                    st.rerun()
+        if any("openrouter" in p.base_url for p in (_CFG.providers or {}).values()):
+            st.caption("OpenRouter: without a pick, the cheapest model allowed by the account "
+                       "guardrails is used automatically.")
+        st.caption("Tools: " + _tool_inventory_text())
+
+
+def _feedback_popover() -> None:
+    """Always visible bottom-right: report a bug or leave a note about the last answer."""
+    msgs = st.session_state.get("messages") or []
+    last = msgs[-1] if msgs else {}
+    if last.get("role") == "assistant":
+        answer = last.get("content", "")
+        question = msgs[-2]["content"] if len(msgs) > 1 else ""
+        model = (last.get("meta") or {}).get("model", "")
+    else:
+        answer, question, model = "", "", st.session_state.get("model_name", "")
+    with st.popover("💬 Feedback", help="Bug report or note about the last answer"):
+        with st.form(key="feedback_form", clear_on_submit=True, border=False):
+            category = st.radio("Type", ["Bug report", "General feedback"], horizontal=True)
+            text = st.text_area("What happened, or what would you like to see?")
+            if st.form_submit_button("Submit"):
+                if text.strip():
+                    _record_feedback(question, answer, model, category, text.strip())
+                    st.success("Thanks — recorded.")
+                else:
+                    st.warning("Add a note before submitting.")
+
+
+def _settings_row() -> None:
+    """Everything below the chat window: data sources, model, feedback."""
+    _sync_remote_clients()
+    left, mid, right = st.columns([1.6, 3.4, 1.4], vertical_alignment="center")
+    with left:
+        c1, c2 = st.columns(2)
+        with c1:
+            _source_chip("elab")
+        with c2:
+            _source_chip("dt")
+    with mid:
+        _model_popover(_resolve_llm())
+    with right:
+        _feedback_popover()
+
+
+def _render_answer(msg: dict, key: str) -> None:
+    """Tool calls + timing above the answer, copy button below — nothing else."""
+    meta = msg.get("meta") or {}
+    calls = meta.get("tool_calls") or []
+    elapsed = meta.get("elapsed")
+    timing = f"researched for {elapsed:.1f} s" if elapsed else ""
+    if calls:
+        label = f"⚙ {len(calls)} tool call" + ("s" if len(calls) != 1 else "")
+        if timing:
+            label += f" · {timing}"
+        with st.expander(label, expanded=False):
+            for call in calls:
+                st.code(call, language=None)
+    elif timing:
+        st.caption(timing)
+    st.markdown(msg.get("content", ""))
+    _copy_button(msg.get("content", ""), key)
+
+
+def _copy_button(text: str, key: str) -> None:
+    """Copy the answer as markdown (Streamlit has no native clipboard button)."""
+    if not text:
+        return
+    components.html(
+        "<button id='copy' style='font:inherit;font-size:0.85rem;padding:0.2rem 0.6rem;"
+        "border:1px solid rgba(128,128,128,.4);border-radius:0.5rem;background:transparent;"
+        "color:inherit;cursor:pointer'>📋 Copy markdown</button>"
+        "<script>const b=document.getElementById('copy');"
+        "b.onclick=async()=>{try{await navigator.clipboard.writeText(" + json.dumps(text) + ");"
+        "b.textContent='✓ copied';setTimeout(()=>b.textContent='📋 Copy markdown',1500);}"
+        "catch(e){b.textContent='copy failed';}};</script>",
+        height=38,
+    )
+
+
+def _run_turn(prompt: str) -> None:
+    """Answer one question, log the privacy-safe turn record and render it."""
+    llm = _resolve_llm()
+    if not llm["api_key"]:
+        st.error(f"No API key for provider '{llm['provider']}' — set it in the environment "
+                 f"or .env at the repo root and restart the app.")
         st.stop()
+    client = OpenAI(api_key=llm["api_key"], base_url=llm["base_url"])
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    if _CFG.cluster.cluster_id:
-        st.sidebar.caption(_CFG.cluster.cluster_id)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    # ---- Remote data sources (eLabFTW / DataTagger), optional ----------
-    # Tokens come from the user (BYOK, via the /el or /dt register pages).
-    # They live in session state only and are passed to the *already running*
-    # MCP proxies. The tool selection itself is decided by each token (proxy
-    # filters tools/list).
-    with st.sidebar.expander("🔌 Data sources (eLabFTW / DataTagger)", expanded=False):
-        # Bring-your-own-token: each user registers their personal JWT on the
-        # proxy's /register page and pastes it here. No shared/demo tokens are
-        # shipped; the token decides which tools are exposed (proxy filters).
-        st.markdown(
-            "Connect your lab notebook (eLabFTW) and/or the research data "
-            "repository (DataTagger) to ask the chat about your own data.\n\n"
-            "1. Open the registration page for each service and log in with "
-            "your account to get a personal token.\n"
-            "2. Paste the token below.\n\n"
-            "- [eLabFTW register](https://researchmcp.duckdns.org/el/register)\n"
-            "- [DataTagger register](https://researchmcp.duckdns.org/dt/register)"
+    api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    local_tools = len(openai_tools.build_openai_tools())
+    tools_available = {
+        "local": local_tools,
+        "elab": st.session_state.get("elab_tools", 0) if st.session_state.get("elab_token") else 0,
+        "dt": st.session_state.get("dt_tools", 0) if st.session_state.get("dt_token") else 0,
+    }
+    tools_available["total"] = sum(tools_available.values())
+
+    with st.chat_message("assistant"):
+        with st.spinner("Searching…"):
+            try:
+                answer, tool_calls, elapsed, turn_meta = _answer(
+                    client, llm["model"], api_msgs, extra=llm.get("extra")
+                )
+            except Exception as exc:
+                answer = f"Error: {exc}"
+                tool_calls = []
+                elapsed = None
+                turn_meta = {"rounds": 0, "tools": [], "usage": {}, "error": type(exc).__name__}
+
+        # Telemetry: exactly one privacy-safe line per turn (hashes and lengths
+        # only). Raw prompt/answer text never enters the log — it is written
+        # only when the user submits the 💬 Feedback form.
+        st.session_state["turns"] = st.session_state.get("turns", 0) + 1
+        st.session_state["tool_calls_total"] = (
+            st.session_state.get("tool_calls_total", 0) + len(tool_calls or [])
         )
-        elab_tok = st.text_input(
-            "eLabFTW token", type="password",
-            key="elab_token_input",
-            placeholder="Paste token from /el/register",
+        telemetry.log_turn(
+            session=st.session_state["session_id"],
+            turn=st.session_state["turns"],
+            provider=llm["provider"],
+            model=llm["model"],
+            base_url=llm["base_url"],
+            tools_available=tools_available,
+            rounds=turn_meta.get("rounds", 0),
+            tools=turn_meta.get("tools") or [],
+            prompt=prompt,
+            answer=answer,
+            usage=turn_meta.get("usage") or {},
+            latency_ms=(elapsed or 0) * 1000,
+            error=turn_meta.get("error"),
         )
-        if elab_tok:
-            st.session_state["elab_token"] = elab_tok.strip()
-        elif st.session_state.get("elab_token"):
-            st.session_state["elab_token"] = ""
+        meta = {"model": llm["model"], "elapsed": elapsed, "tool_calls": tool_calls or []}
+        _render_answer({"content": answer, "meta": meta},
+                       key=f"copy_{len(st.session_state.messages)}")
 
-        dt_tok = st.text_input(
-            "DataTagger token", type="password",
-            key="dt_token_input",
-            placeholder="Paste token from /dt/register",
-        )
-        if dt_tok:
-            st.session_state["dt_token"] = dt_tok.strip()
-        elif st.session_state.get("dt_token"):
-            st.session_state["dt_token"] = ""
+    st.session_state.messages.append({"role": "assistant", "content": answer, "meta": meta})
 
-        if st.button("Connect sources", type="primary"):
-            rc = openai_tools.get_remote_clients() or mcp_clients.RemoteClients()
-            rc.elab_token = st.session_state.get("elab_token") or None
-            rc.dt_token = st.session_state.get("dt_token") or None
-            openai_tools.set_remote_clients(rc)
-            with st.spinner("Connecting..."):
-                tools = rc.build_openai_tools()
-            n_elab = sum(1 for t in tools if t["function"]["name"].startswith("elab_") and "unavailable" not in t["function"]["name"])
-            n_dt = sum(1 for t in tools if t["function"]["name"].startswith("dt_") and "unavailable" not in t["function"]["name"])
-            msgs = []
-            if st.session_state.get("elab_token"):
-                msgs.append(f"eLabFTW: connected ({n_elab} tools)" if n_elab else "eLabFTW: token invalid or expired — please register a new one.")
-            if st.session_state.get("dt_token"):
-                msgs.append(f"DataTagger: connected ({n_dt} tools)" if n_dt else "DataTagger: token invalid or expired — please register a new one.")
-            if not msgs:
-                msgs.append("No tokens entered.")
-            for m in msgs:
-                st.caption(m)
 
-    # Install (or refresh) the session's RemoteClients from session state.
-    rc = openai_tools.get_remote_clients()
-    if rc is None:
-        rc = mcp_clients.RemoteClients(
-            elab_token=st.session_state.get("elab_token") or None,
-            dt_token=st.session_state.get("dt_token") or None,
-        )
-        openai_tools.set_remote_clients(rc)
-    else:
-        rc.elab_token = st.session_state.get("elab_token") or None
-        rc.dt_token = st.session_state.get("dt_token") or None
+def _view_chat() -> None:
+    """Chat page: clickable starters, history, chat bar with the settings below it."""
+    st.markdown(f"##### {APP_TITLE}")
 
-    # Chat history in session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    st.session_state.setdefault("session_id", telemetry.new_session_id())
+    st.session_state.setdefault("turns", 0)
+    st.session_state.setdefault("tool_calls_total", 0)
 
-    # Render history
+    if not st.session_state.messages:
+        st.caption("New here? Start with one of these:")
+        for start in range(0, len(_EXAMPLES), 2):
+            row = _EXAMPLES[start:start + 2]
+            cols = st.columns(len(row))
+            for col, question in zip(cols, row):
+                with col:
+                    if st.button(question, key=f"example_{abs(hash(question)) % 10 ** 8}",
+                                 width="stretch"):
+                        st.session_state["pending_prompt"] = question
+                        st.rerun()
+
     for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant" and i > 0:
-                question = st.session_state.messages[i - 1]["content"]
-                _feedback_widget(f"feedback_{i}", question, msg["content"], model)
+            if msg["role"] == "assistant":
+                _render_answer(msg, key=f"copy_{i}")
+            else:
+                st.markdown(msg["content"])
 
-    # Input
-    if prompt := st.chat_input("Ask about papers, PIs, or research topics..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    with st.bottom:
+        prompt = st.chat_input(_chat_placeholder())
+        _settings_row()
 
-        # Build messages for API (text-only history)
-        api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    if prompt:
+        _run_turn(prompt)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Searching..."):
-                try:
-                    answer, tool_calls, elapsed, turn_meta = _answer(client, model, api_msgs, extra=extra_kwargs)
-                except Exception as exc:
-                    answer = f"Error: {exc}"
-                    tool_calls = []
-                    elapsed = None
-                    turn_meta = {"rounds": 0, "tools": [], "usage": {}, "error": type(exc).__name__}
 
-            # Telemetry: exactly one privacy-safe line per turn (hashes and
-            # lengths only). Raw prompt/answer text never enters the log -- it is
-            # written only when the user submits the 💬 Feedback form.
-            st.session_state["turns"] = st.session_state.get("turns", 0) + 1
-            turn_no = st.session_state["turns"]
-            st.session_state["tool_calls_total"] = (
-                st.session_state.get("tool_calls_total", 0) + len(turn_meta.get("tools") or [])
-            )
-            telemetry.log_turn(
-                session=st.session_state["session_id"],
-                turn=turn_no,
-                provider=provider_label,
-                model=model,
-                base_url=base_url,
-                tools_available=tools_available,
-                rounds=turn_meta.get("rounds", 0),
-                tools=turn_meta.get("tools") or [],
-                prompt=prompt,
-                answer=answer,
-                usage=turn_meta.get("usage") or {},
-                latency_ms=(elapsed or 0) * 1000,
-                error=turn_meta.get("error"),
-            )
+# ---------------------------------------------------------------------------
+# Navigation: one page per view, in the Streamlit menu at the top (no sidebar)
+# ---------------------------------------------------------------------------
+_PAGES = [
+    st.Page(_view_chat, title="Chat", icon="💬", url_path="chat", default=True),
+    st.Page(_view_corpus_map, title="Corpus Map", icon="🗺️", url_path="corpus-map"),
+    st.Page(_view_collaboration, title="Collaboration", icon="🤝", url_path="collaboration"),
+    st.Page(_view_pipeline, title="Pipeline", icon="🔧", url_path="pipeline"),
+]
 
-            st.markdown(answer)
-            if elapsed is not None:
-                st.caption(
-                    f"⏱ {elapsed:.1f}s · `{model}` · {turn_meta.get('rounds', 0)} round(s) · "
-                    f"{len(turn_meta.get('tools') or [])} tool call(s) · "
-                    f"session `{st.session_state['session_id']}` · "
-                    f"v{telemetry.version_info()['git_sha']}"
-                )
-            if tool_calls:
-                with st.expander("Tools used", expanded=False):
-                    for tc in tool_calls:
-                        st.code(tc, language=None)
-            _feedback_widget(f"feedback_{len(st.session_state.messages)}", prompt, answer, model)
-
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+_page_setup()
+st.navigation(_PAGES, position="top").run()
