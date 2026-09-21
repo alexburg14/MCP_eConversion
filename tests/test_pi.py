@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.integration  # imports the real caches
+
 import server
 from nomad_search import _strip_titles
 

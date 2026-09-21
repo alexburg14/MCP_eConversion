@@ -4,6 +4,9 @@ These encode the invariant that replaced the old hand-maintained duplicate: the
 OpenAI schemas are derived from the one registry, so they cannot drift and every
 parameter carries its help.
 """
+import pytest
+
+pytestmark = pytest.mark.integration  # imports the real caches
 import json
 
 import openai_tools

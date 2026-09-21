@@ -14,8 +14,10 @@ umap-learn
 #   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 # collaboration graph (PI co-authorship network)
 networkx
-# chat interface (GWDG SAIA endpoint, OpenAI-compatible)
+# chat backend (GWDG SAIA endpoint, OpenAI-compatible) served by FastAPI over SSE
 openai
-streamlit
-# tests
+fastapi
+uvicorn[standard]
+# tests (httpx also backs fastapi.testclient)
 pytest
+httpx

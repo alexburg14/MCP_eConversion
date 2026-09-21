@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "streamlit-chat",
-      "runtimeExecutable": "streamlit",
-      "runtimeArgs": ["run", "src/app.py", "--server.headless", "true"],
-      "port": 8501
+      "name": "web",
+      "runtimeExecutable": "uvicorn",
+      "runtimeArgs": ["main:app", "--app-dir", "src", "--port", "8000", "--reload"],
+      "port": 8000
     }
   ]
 }

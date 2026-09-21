@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration  # imports the real caches
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import mcp_clients
@@ -173,40 +175,42 @@ def test_call_unknown_prefix_returns_error_json():
 
 # --- openai_tools glue ------------------------------------------------------
 
-def test_set_remote_clients_and_chat_tools(monkeypatch):
+_ELAB_X = {"type": "function", "function": {"name": "elab_x", "description": "d",
+                                            "parameters": {"type": "object", "properties": {}}}}
+
+
+class _FakeRC:
+    def build_openai_tools(self):
+        return [_ELAB_X]
+
+    def call(self, name, arguments):
+        return json.dumps({"dispatched": name})
+
+
+def test_chat_tools_append_the_sessions_remote_tools():
     # Local tools come from the real registry (needs server caches); to keep
     # this unit hermetic we only assert the remote part is appended when a
-    # RemoteClients instance is installed.
-    class FakeRC:
-        def build_openai_tools(self):
-            return [{"type": "function", "function": {"name": "elab_x", "description": "d",
-                                                     "parameters": {"type": "object", "properties": {}}}}]
+    # RemoteClients instance is passed.
+    names = [t["function"]["name"] for t in openai_tools.build_chat_tools(remote=_FakeRC())]
+    assert "elab_x" in names
+    assert any(not n.startswith(("elab_", "dt_")) for n in names)  # local tools still present
 
-    openai_tools.set_remote_clients(FakeRC())
-    try:
-        chat = openai_tools.build_chat_tools()
-        names = [t["function"]["name"] for t in chat]
-        assert "elab_x" in names
-        # local tools still present (server registry)
-        assert any(not n.startswith(("elab_", "dt_")) for n in names)
-    finally:
-        openai_tools.set_remote_clients(None)
+
+def test_chat_tools_prefer_cached_remote_schemas_over_a_fetch():
+    class NeverFetch:
+        def build_openai_tools(self):
+            raise AssertionError("must not fetch when schemas are cached")
+
+    names = [t["function"]["name"]
+             for t in openai_tools.build_chat_tools(remote=NeverFetch(), remote_schemas=[_ELAB_X])]
+    assert "elab_x" in names
 
 
 def test_call_tool_remote_without_client_returns_error_json():
-    openai_tools.set_remote_clients(None)
     out = json.loads(openai_tools.call_tool("elab_get_experiment", {}))
     assert "error" in out
 
 
-def test_call_tool_remote_dispatches(monkeypatch):
-    class FakeRC:
-        def call(self, name, arguments):
-            return json.dumps({"dispatched": name})
-
-    openai_tools.set_remote_clients(FakeRC())
-    try:
-        out = json.loads(openai_tools.call_tool("elab_get_experiment", {"id": 1}))
-        assert out == {"dispatched": "elab_get_experiment"}
-    finally:
-        openai_tools.set_remote_clients(None)
+def test_call_tool_remote_dispatches_to_the_passed_client():
+    out = json.loads(openai_tools.call_tool("elab_get_experiment", {"id": 1}, remote=_FakeRC()))
+    assert out == {"dispatched": "elab_get_experiment"}

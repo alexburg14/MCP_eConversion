@@ -9,8 +9,9 @@ whatever the token allows is exactly what the chat exposes.
 
 Design notes
 ------------
-* Tokens are per-user, per-session (BYOK).  They are kept in Streamlit
-  session state -- never logged.
+* Tokens are per-user, per-session (BYOK).  They live in the server-side
+  session (auth.Session) and are passed explicitly -- never logged, never in
+  module state.
 * Auth transport differs per proxy:
     - elabmcp-proxy reads the token ONLY from the URL query (?token=...),
       not from a header (verified 2026-09).
