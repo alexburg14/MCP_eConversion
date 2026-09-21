@@ -13,10 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+_LOG_DIR = Path(os.environ.get("LOG_DIR") or (Path(__file__).resolve().parent.parent / "logs"))
+_MAX_BYTES = int(os.environ.get("LOG_MAX_BYTES", "2000000"))
+_BACKUP_COUNT = int(os.environ.get("LOG_BACKUP_COUNT", "3"))
 _NAMESPACE = "assistant"
 _configured = False
 
@@ -52,13 +55,18 @@ def configure_logging(level: int = logging.INFO) -> None:
     root.addHandler(stream)
 
     file = logging.handlers.RotatingFileHandler(
-        _LOG_DIR / "app.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        _LOG_DIR / "app.log", maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8"
     )
     file.setFormatter(formatter)
     root.addHandler(file)
 
     root.propagate = False
     _configured = True
+
+
+def log_dir() -> Path:
+    """Directory holding app.log + its rotations (overridable via LOG_DIR)."""
+    return _LOG_DIR
 
 
 def get_logger(name: str) -> logging.Logger:

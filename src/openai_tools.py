@@ -19,6 +19,7 @@ import json
 from typing import Any, Callable
 
 import server
+import telemetry
 from logging_config import get_logger
 
 log = get_logger("tools")
@@ -109,5 +110,5 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str:
     except Exception as exc:  # noqa: BLE001
         log.error("tool failed", exc_info=True, extra={"fields": {"tool": name}})
         return json.dumps({"error": f"{name} failed: {type(exc).__name__}: {exc}"})
-    log.info("tool call", extra={"fields": {"tool": name, "args": arguments}})
+    log.info("tool call", extra={"fields": {"tool": name, **telemetry.arg_fields(arguments)}})
     return result

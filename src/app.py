@@ -10,6 +10,7 @@ Requires API_KEY in the environment or in a .env file at the repo root.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import altair as alt
@@ -23,6 +24,7 @@ import corpus_map
 from config import get_config
 import openai_tools
 import mcp_clients
+import telemetry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CFG = get_config()
@@ -134,6 +136,14 @@ def _load_dotenv() -> None:
 
 _TOOLS = openai_tools.build_openai_tools()
 
+# One startup line per process: which build, which cache state, which tools.
+telemetry.log_startup(
+    tools_local=len(_TOOLS),
+    tools_remote=0,
+    providers=list((_CFG.providers or {})),
+    models=MODELS,
+)
+
 _BASE_SYSTEM = f"""\
 You are a research assistant for {_CFG.cluster.description}.
 
@@ -229,9 +239,18 @@ def _remote_system_note() -> str:
     )
 
 
-def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str]]:
-    """Run the tool-use loop; return (answer_text, list_of_tool_calls_summary)."""
+def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None = None) -> tuple[str, list[str], dict]:
+    """Run the tool-use loop.
+
+    Returns ``(answer_text, tool_calls_display, meta)``; ``meta`` carries the
+    rounds, per-tool-call metadata, token usage and error flag that the
+    per-turn telemetry line needs.
+    """
     tool_log: list[str] = []
+    tool_meta: list[dict] = []
+    usage_totals = {"prompt": 0, "completion": 0, "total": 0}
+    rounds = 0
+    error: str | None = None
     sys_content = _SYSTEM + _remote_system_note()
     msgs = [{"role": "system", "content": sys_content}] + list(messages)
     # Tools are rebuilt per call: local + (session) remote tools. A user who
@@ -247,7 +266,8 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
         else:
             kwargs.update(extra)
 
-    for _ in range(_MAX_TOOL_ROUNDS):
+    for _round in range(1, _MAX_TOOL_ROUNDS + 1):
+        rounds = _round
         response = client.chat.completions.create(
             model=model,
             max_tokens=2048,
@@ -256,9 +276,15 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
             **kwargs,
         )
         msg = response.choices[0].message
+        _usage = getattr(response, "usage", None)
+        if _usage is not None:
+            usage_totals["prompt"] += int(getattr(_usage, "prompt_tokens", 0) or 0)
+            usage_totals["completion"] += int(getattr(_usage, "completion_tokens", 0) or 0)
+            usage_totals["total"] += int(getattr(_usage, "total_tokens", 0) or 0)
 
         if not msg.tool_calls:
-            return msg.content or "", tool_log
+            meta = {"rounds": rounds, "tools": tool_meta, "usage": usage_totals, "error": error}
+            return msg.content or "", tool_log, meta
 
         msgs.append({
             "role": "assistant",
@@ -274,7 +300,11 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
+            _call_t0 = time.perf_counter()
             result = openai_tools.call_tool(tc.function.name, args)
+            _call_ms = (time.perf_counter() - _call_t0) * 1000
+            _call_ok = not (isinstance(result, str) and result.lstrip().startswith('{"error"'))
+            tool_meta.append(telemetry.tool_call_meta(tc.function.name, args, _call_ms, _call_ok))
             tool_log.append(f"`{tc.function.name}({(tc.function.arguments or '')[:80]})`")
             msgs.append({
                 "role": "tool",
@@ -282,7 +312,52 @@ def _answer(client: OpenAI, model: str, messages: list[dict], extra: dict | None
                 "content": result,
             })
 
-    return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log
+    meta = {
+        "rounds": rounds,
+        "tools": tool_meta,
+        "usage": usage_totals,
+        "error": "tool_call_limit_reached",
+    }
+    return "Tool-call limit reached without a final answer — try rephrasing the question.", tool_log, meta
+
+
+def _tool_availability() -> dict:
+    """How many tools the model is offered in this session (local + remote)."""
+    try:
+        tools = openai_tools.build_chat_tools()
+    except Exception:  # noqa: BLE001 -- stats must never break the chat
+        return {"local": 0, "elab": 0, "dt": 0, "total": 0}
+    names = [t["function"]["name"] for t in tools]
+    return {
+        "local": sum(1 for n in names if not n.startswith(("elab_", "dt_"))),
+        "elab": sum(1 for n in names if n.startswith("elab_")),
+        "dt": sum(1 for n in names if n.startswith("dt_")),
+        "total": len(names),
+    }
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _coverage_cached() -> dict:
+    """Data coverage (cache availability/count/mtime) -- rarely changes."""
+    return telemetry.coverage()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _stats_cached() -> dict:
+    """All-time usage aggregated from the log files (current + rotations)."""
+    return telemetry.summarize()
+
+
+def _coverage_table(snapshot: dict) -> pd.DataFrame:
+    rows = []
+    for name, entry in snapshot.items():
+        rows.append({
+            "cache": name,
+            "available": "yes" if entry.get("available") else "no",
+            "entries": "—" if entry.get("count") is None else str(entry["count"]),
+            "last built": (entry.get("last_built") or "—")[:19].replace("T", " "),
+        })
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(show_spinner="Computing corpus map (UMAP + clustering)...")
@@ -296,7 +371,12 @@ def _build_corpus_map(n_clusters: int) -> list[dict]:
 
 st.set_page_config(page_title=_CFG.cluster.display_name, page_icon="⚡", layout="centered")
 st.title(f"⚡ {_CFG.cluster.display_name}")
-st.caption(f"{len(server.papers)} publications · {len(server._PIS)} PIs")
+_COVERAGE = telemetry.coverage()
+st.caption(
+    f"{len(server.papers)} publications · {len(server._PIS)} PIs · "
+    f"{_COVERAGE.get('fulltext', {}).get('count', 0)} full texts · "
+    f"v{telemetry.version_info()['git_sha']}"
+)
 
 tab_chat, tab_map = st.tabs(["💬 Chat", "🗺️ Corpus Map"])
 
@@ -356,6 +436,7 @@ with tab_chat:
     if provider_names:
         default_provider = next((n for n, p in providers.items() if p.base_url == _CFG.llm.base_url), provider_names[0])
         provider_name = st.sidebar.selectbox("Provider", provider_names, index=provider_names.index(default_provider))
+        provider_label = provider_name
         provider = providers[provider_name]
         base_url = provider.base_url
         default_model = provider.default_model
@@ -384,7 +465,48 @@ with tab_chat:
         default_model = _CFG.llm.default_model
         model = default_model
         api_key = os.environ.get("API_KEY", "")
+        provider_label = "default"
         st.sidebar.caption(f"Endpoint: {base_url}")
+
+    # ---- Stats panel: what answered, on which data, in which build --------
+    coverage_snapshot = _coverage_cached()
+    tools_available = _tool_availability()
+    _version = telemetry.version_info()
+    with st.sidebar.expander("📊 Stats & version", expanded=False):
+        st.caption(f"Model `{model}` · provider {provider_label}")
+        st.caption(f"Endpoint {base_url}")
+        _vline = f"Version `{_version['git_sha']}`"
+        if _version.get("build_time"):
+            _vline += f" · built {_version['build_time']}"
+        st.caption(_vline)
+        st.caption(
+            f"Tools offered: {tools_available['total']} "
+            f"({tools_available['local']} local · {tools_available['elab']} eLabFTW "
+            f"· {tools_available['dt']} DataTagger)"
+        )
+        st.markdown("**Data coverage**")
+        st.dataframe(_coverage_table(coverage_snapshot), hide_index=True, width="stretch")
+        _all = _stats_cached()
+        # The panel renders before the chat block, so make sure the session
+        # id/counters exist by now (otherwise it renders "session —").
+        _sess = st.session_state.setdefault("session_id", telemetry.new_session_id())
+        st.session_state.setdefault("turns", 0)
+        st.session_state.setdefault("tool_calls_total", 0)
+        st.markdown("**This session**")
+        st.caption(
+            f"{st.session_state.get('turns', 0)} turns · "
+            f"{st.session_state.get('tool_calls_total', 0)} tool calls · "
+            f"session `{_sess}`"
+        )
+        st.markdown("**All users** (from the server logs)")
+        st.caption(
+            f"{_all['turns']} turns · {_all['sessions']} sessions · {_all['error_turns']} errors · "
+            f"⌀ {_all['avg_latency_ms']} ms · {_all['reports']} problem reports"
+        )
+        if _all["models"]:
+            st.caption("Models: " + ", ".join(f"{k} ({v}×)" for k, v in _all["models"].items()))
+        if _all["tools"]:
+            st.caption("Tools: " + ", ".join(f"{k} ({v['calls']}×)" for k, v in list(_all["tools"].items())[:8]))
 
     if not api_key:
         st.error("Set the API key for this provider in your environment or in `.env` at the repo root and restart the app.")
@@ -464,6 +586,11 @@ with tab_chat:
     # Chat history in session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    # Anonymous session id + counters surfaced in the stats panel
+    if "session_id" not in st.session_state:
+        st.session_state["session_id"] = telemetry.new_session_id()
+        st.session_state["turns"] = 0
+        st.session_state["tool_calls_total"] = 0
 
     # Render history
     for msg in st.session_state.messages:
@@ -480,17 +607,94 @@ with tab_chat:
         api_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
 
         with st.chat_message("assistant"):
+            _turn_t0 = time.perf_counter()
             with st.spinner("Searching..."):
                 try:
-                    answer, tool_calls = _answer(client, model, api_msgs, extra=extra_kwargs)
+                    answer, tool_calls, turn_meta = _answer(client, model, api_msgs, extra=extra_kwargs)
                 except Exception as exc:
                     answer = f"Error: {exc}"
                     tool_calls = []
+                    turn_meta = {"rounds": 0, "tools": [], "usage": {}, "error": type(exc).__name__}
+            _latency_ms = (time.perf_counter() - _turn_t0) * 1000
+
+            # Telemetry: exactly one privacy-safe line per turn. Hashes and
+            # lengths only -- the prompt/answer text never enters the log.
+            st.session_state["turns"] = st.session_state.get("turns", 0) + 1
+            turn_no = st.session_state["turns"]
+            st.session_state["tool_calls_total"] = (
+                st.session_state.get("tool_calls_total", 0) + len(turn_meta.get("tools") or [])
+            )
+            telemetry.log_turn(
+                session=st.session_state["session_id"],
+                turn=turn_no,
+                provider=provider_label,
+                model=model,
+                base_url=base_url,
+                tools_available=tools_available,
+                rounds=turn_meta.get("rounds", 0),
+                tools=turn_meta.get("tools") or [],
+                prompt=prompt,
+                answer=answer,
+                usage=turn_meta.get("usage") or {},
+                latency_ms=_latency_ms,
+                error=turn_meta.get("error"),
+            )
 
             st.markdown(answer)
+            st.caption(
+                f"`{model}` · {turn_meta.get('rounds', 0)} round(s) · "
+                f"{len(turn_meta.get('tools') or [])} tool call(s) · {_latency_ms / 1000:.1f} s · "
+                f"session `{st.session_state['session_id']}` · v{telemetry.version_info()['git_sha']}"
+            )
             if tool_calls:
                 with st.expander("Tools used", expanded=False):
                     for tc in tool_calls:
                         st.code(tc, language=None)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.session_state["turn_details"] = (st.session_state.get("turn_details") or []) + [{
+            "session": st.session_state["session_id"],
+            "turn": turn_no,
+            "provider": provider_label,
+            "model": model,
+            "base_url": base_url,
+            "prompt": prompt,
+            "answer": answer,
+            "tools": turn_meta.get("tools") or [],
+            "coverage": coverage_snapshot,
+        }]
+
+    # ---- "Report problem" -------------------------------------------------
+    # Deliberately OUTSIDE the chat_input block: a button click is a fresh
+    # rerun without a new prompt, so a button rendered inside that block would
+    # already be gone when it is clicked. Reads the last turn from session
+    # state -- the only place raw prompt/answer text is ever persisted.
+    _last_turns = (st.session_state.get("turn_details") or [])[-1:]
+    if _last_turns:
+        _stored = _last_turns[0]
+        with st.expander("🚩 Report a problem with the last answer", expanded=False):
+            st.caption(
+                "Sends the question, the answer and the tool calls of the last turn to the "
+                "server so it can be reproduced. Without this click nothing but lengths and "
+                "hashes are logged."
+            )
+            _report_comment = st.text_area(
+                "What went wrong? (optional)",
+                key=f"report_comment_{_stored['turn']}",
+                height=80,
+                placeholder="e.g. wrong paper cited, answer cut off, tool error…",
+            )
+            if st.button("Send report", key=f"report_send_{_stored['turn']}"):
+                _report_id = telemetry.write_report(
+                    session=_stored["session"],
+                    turn=_stored["turn"],
+                    comment=_report_comment,
+                    prompt=_stored["prompt"],
+                    answer=_stored["answer"],
+                    tools=_stored["tools"],
+                    provider=_stored["provider"],
+                    model=_stored["model"],
+                    base_url=_stored["base_url"],
+                    coverage_snapshot=_stored.get("coverage"),
+                )
+                st.success(f"Thanks — report `{_report_id}` saved (session {_stored['session']}).")
