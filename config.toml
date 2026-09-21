@@ -15,25 +15,48 @@ website = "https://e-conversion.de"
 [llm]
 # OpenAI-compatible chat endpoints. Multiple providers can be defined and are
 # selectable in the sidebar. The first entry is the default.
+#
+# The model list mirrors the open-weight models GWDG actually serves on
+# chat-ai.academiccloud.de (docs list minus the ids the API no longer answers):
+# https://docs.hpc.gwdg.de/services/ai-services/chat-ai/models/
+# Re-check with:  GET https://chat-ai.academiccloud.de/v1/models
 base_url = "https://chat-ai.academiccloud.de/v1"
-default_model = "qwen3.5-122b-a10b"
+default_model = "qwen3.8-27b"
 models = [
-    "qwen3.5-122b-a10b",
-    "glm-4.7",
+    "qwen3.8-27b",
+    "qwen3.6-35b-a3b",
+    "qwen3.5-397b-a17b",
+    "qwen3-30b-a3b-instruct-2507",
+    "qwen3-coder-next",
+    "qwen3-omni-30b-a3b-instruct",
+    "glm-5.3-flash",
+    "deepseek-v4-flash-0731",
+    "mistral-medium-3.5-128b",
+    "devstral-2-123b-instruct-2512",
+    "gemma-4-31b-it",
+    "apertus-70b-instruct-2509",
+    "meta-llama-3.1-8b-instruct",
     "openai-gpt-oss-120b",
-    "mistral-large-3-675b-instruct-2512",
 ]
-
-[llm.providers]
 
 [llm.providers.gwdg]
 base_url = "https://chat-ai.academiccloud.de/v1"
-default_model = "qwen3.5-122b-a10b"
+default_model = "qwen3.8-27b"
 models = [
-    "qwen3.5-122b-a10b",
-    "glm-4.7",
+    "qwen3.8-27b",
+    "qwen3.6-35b-a3b",
+    "qwen3.5-397b-a17b",
+    "qwen3-30b-a3b-instruct-2507",
+    "qwen3-coder-next",
+    "qwen3-omni-30b-a3b-instruct",
+    "glm-5.3-flash",
+    "deepseek-v4-flash-0731",
+    "mistral-medium-3.5-128b",
+    "devstral-2-123b-instruct-2512",
+    "gemma-4-31b-it",
+    "apertus-70b-instruct-2509",
+    "meta-llama-3.1-8b-instruct",
     "openai-gpt-oss-120b",
-    "mistral-large-3-675b-instruct-2512",
 ]
 
 [llm.providers.openrouter]
