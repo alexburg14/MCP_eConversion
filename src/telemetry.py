@@ -186,10 +186,10 @@ def log_feedback(*, category: str, session: str, model: str,
 
 
 def count_feedback() -> int:
-    if not REPORT_FILE.exists():
+    if not FEEDBACK_FILE.exists():
         return 0
     try:
-        with REPORT_FILE.open(encoding="utf-8") as fh:
+        with FEEDBACK_FILE.open(encoding="utf-8") as fh:
             return sum(1 for line in fh if line.strip())
     except OSError:
         return 0

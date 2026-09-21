@@ -36,8 +36,7 @@ def isolated(tmp_path, monkeypatch):
         root.removeHandler(handler)
         handler.close()
     logging_config.configure_logging()
-    monkeypatch.setattr(telemetry, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(telemetry, "REPORT_FILE", report_dir / "reports.jsonl")
+    monkeypatch.setattr(telemetry, "FEEDBACK_FILE", report_dir / "feedback.jsonl")
     monkeypatch.setattr(telemetry, "LOG_TOOL_ARGS", False)
     yield log_dir, report_dir
 
@@ -137,3 +136,15 @@ def test_arg_fields_hashes_values(isolated):
     assert SECRET_PROMPT not in json.dumps(fields)
     assert fields["args_len"] > 0
 
+
+
+def test_log_feedback_is_metadata_only(isolated):
+    """The feedback widget stores the raw text itself; its log line must not."""
+    telemetry.log_feedback(
+        category="Bug report", session="abcd1234", model="qwen3.8-27b",
+        text_len=42, question_len=len(SECRET_PROMPT), answer_len=len(SECRET_ANSWER),
+    )
+    text = _log_text(isolated[0])
+    assert "feedback" in text
+    assert SECRET_PROMPT not in text and SECRET_ANSWER not in text
+    assert 'Bug report' in text
