@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import corpus_map
+import semantic_search
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 COLLAB_GRAPH_PATH = _REPO_ROOT / "data" / "cache" / "collaboration_graph.json"
@@ -86,3 +87,21 @@ def collab_graph_payload() -> dict | None:
     ]
     links = [{"source": l["source"], "target": l["target"], "weight": l["weight"]} for l in g["links"]]
     return {"nodes": nodes, "links": links}
+
+
+def text_similarity_available() -> bool:
+    return semantic_search.is_available()
+
+
+def text_similarity_payload(text: str, top_k: int = 10) -> list[dict]:
+    """Papers closest to an arbitrary pasted abstract, by cosine similarity in
+    the same BGE-small embedding space as the publication map — a query-to-doc
+    search (see semantic_search.semantic_search), not the map's 2D layout."""
+    import server  # local import: the caches are loaded by the entry point
+
+    results = semantic_search.semantic_search(text, server.papers_by_doi, top_k=top_k)
+    return [
+        {"doi": r.get("doi", ""), "title": r.get("title", "(untitled)"),
+         "year": str(r.get("year", "")), "score": round(float(r.get("semantic_score", 0.0)), 4)}
+        for r in results
+    ]

@@ -335,6 +335,18 @@ button { font: inherit; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
 .dk-tip { background: #1b1e26 !important; color: #e9ebf0 !important; font: 12px/1.4 var(--body) !important; padding: 6px 9px !important; border-radius: 6px !important; max-width: 340px; box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+.closest-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hair); }
+.closest-panel .t { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
+.closest-panel .t span { text-transform: none; letter-spacing: 0; color: var(--muted); font-style: italic; }
+.closest-panel ol { list-style: decimal; margin: 8px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 5px; }
+.closest-panel li { display: flex; gap: 10px; align-items: baseline; cursor: pointer; font-size: 13px; color: var(--ink-2); border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
+.closest-panel li:hover { background: var(--panel-2); color: var(--ink); }
+.closest-panel li .ti { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.closest-panel li .y { color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+.closest-panel li .sc { color: var(--accent); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; min-width: 34px; text-align: right; }
+.abstract-panel .desc { color: var(--muted); font-size: 13px; margin: 8px 0 10px; max-width: 70ch; }
+.abstract-panel textarea { width: 100%; resize: vertical; font-size: 13.5px; }
+.abstract-actions { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; }
 
 @media (max-width: 720px) {
   .top { gap: 10px; padding: 0 12px; }

@@ -49,6 +49,7 @@ SSE_PING_S = 15
 STATS_TTL_S = 30
 MAX_PROMPT_CHARS = 20_000
 MAX_FEEDBACK_CHARS = 5_000
+MAX_ABSTRACT_CHARS = 8_000
 FEEDBACK_CATEGORIES = ("Bug report", "General feedback")
 
 # Clickable starters shown while the conversation is empty. Sourced from the
@@ -167,6 +168,8 @@ class AppState:
     corpus_map: Callable[[int], dict] | None = None
     corpus_map_available: Callable[[], bool] = lambda: False
     collab_graph: Callable[[], dict | None] = lambda: None
+    text_similarity: Callable[[str, int], list[dict]] | None = None
+    text_similarity_available: Callable[[], bool] = lambda: False
     coverage: Callable[[], dict] = lambda: {}
     summarize: Callable[[], dict] = _empty_summary
     sessions: auth.SessionStore = field(default_factory=auth.SessionStore)
@@ -196,6 +199,8 @@ class AppState:
             local_tools=local_tools, call_tool=openai_tools.call_tool,
             corpus_map=views.corpus_map_payload, corpus_map_available=views.corpus_map_available,
             collab_graph=views.collab_graph_payload,
+            text_similarity=views.text_similarity_payload,
+            text_similarity_available=views.text_similarity_available,
             coverage=telemetry.coverage, summarize=telemetry.summarize,
         )
 
@@ -232,6 +237,10 @@ class TokenRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     category: str
     text: str = Field(min_length=1, max_length=MAX_FEEDBACK_CHARS)
+
+
+class TextSimilarityRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_ABSTRACT_CHARS)
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +741,14 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
                     "hint": "Embeddings cache not built. Run: python build.py embeddings"}
         payload = await run_in_threadpool(state.corpus_map, clusters)
         return {"available": True, **payload}
+
+    @app.post("/api/text-similarity")
+    async def text_similarity(req: TextSimilarityRequest):
+        if not state.text_similarity_available() or state.text_similarity is None:
+            return {"available": False,
+                    "hint": "Embeddings cache not built. Run: python build.py embeddings"}
+        results = await run_in_threadpool(state.text_similarity, req.text.strip(), 10)
+        return {"available": True, "results": results}
 
     @app.get("/api/collaboration-graph")
     def collaboration_graph():

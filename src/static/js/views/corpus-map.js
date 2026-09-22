@@ -1,5 +1,6 @@
-// Corpus map: UMAP layout of the paper embeddings rendered with deck.gl.
-import { getJSON } from "../api.js";
+// Publication map: UMAP layout of the paper embeddings rendered with deck.gl.
+import { getJSON, postJSON } from "../api.js";
+import { escapeHtml } from "../markdown.js";
 
 const DECK_URL = "https://cdn.jsdelivr.net/npm/deck.gl@9.0.38/dist.min.js";
 let deckLoading = null;
@@ -29,7 +30,7 @@ export function corpusMapView() {
     mount(container) {
       container.innerHTML = `
         <div class="page">
-          <h1>Corpus Map</h1>
+          <h1>Publication Map</h1>
           <p class="lede">UMAP layout of the paper embeddings; KMeans clusters (computed in the full 384-d space)
             labeled with their top title keywords. Scroll to zoom, drag to pan, hover a point for its title —
             a visual answer to “which papers are near the one I'm reading?”</p>
@@ -39,6 +40,23 @@ export function corpusMapView() {
           </div>
           <div class="map-frame"><canvas id="deck-canvas"></canvas><div class="map-status" id="map-status">Loading…</div></div>
           <div class="legend" id="legend"></div>
+          <div class="closest-panel" id="closest-panel" hidden>
+            <div class="t">Closest papers <span id="closest-of"></span></div>
+            <ol id="closest-list"></ol>
+          </div>
+          <div class="closest-panel abstract-panel">
+            <div class="t">Find similar by abstract</div>
+            <p class="desc">Paste an abstract (yours or someone else's) to see the closest papers in this
+              corpus by embedding similarity — click a result to locate it on the map.</p>
+            <label class="field">
+              <textarea id="abstract-input" rows="4" maxlength="8000" placeholder="Paste an abstract…"></textarea>
+            </label>
+            <div class="abstract-actions">
+              <button type="button" class="btn primary" id="abstract-submit">Find similar papers</button>
+              <span class="muted small" id="abstract-status"></span>
+            </div>
+            <ol id="abstract-list"></ol>
+          </div>
         </div>`;
       const $ = (id) => container.querySelector("#" + id);
       const status = $("map-status");
@@ -102,8 +120,14 @@ export function corpusMapView() {
         return new Set(data.filter((d) => d.title.toLowerCase().includes(lq)).slice(0, 100).map((d) => d.title));
       }
 
+      function selectPaper(title) {
+        $("paper-search").value = title;
+        draw();
+      }
+
       function draw() {
         const { hits, viewState } = fit(matchesFor($("paper-search").value));
+        renderClosest(hits);
         const { Deck, OrthographicView } = window.deck;
         if (!deckInst) {
           deckInst = new Deck({
@@ -111,6 +135,7 @@ export function corpusMapView() {
             controller: { scrollZoom: true, dragPan: true, doubleClickZoom: true },
             initialViewState: viewState, layers: layers(hits),
             getTooltip: ({ object }) => object && { html: `<b>${object.title}</b><br/>${object.year} · ${object.cluster}`, className: "dk-tip" },
+            onClick: ({ object }) => { if (object) selectPaper(object.title); },
           });
         } else {
           deckInst.setProps({ layers: layers(hits), initialViewState: viewState });
@@ -123,14 +148,32 @@ export function corpusMapView() {
           `<span><i style="background:rgb(${e.color.join(",")})"></i>${e.cluster}</span>`).join("");
       }
 
+      // Nearest neighbors on the 2D layout (not the full 384-d embedding) —
+      // consistent with what the map visually shows, and needs no round-trip.
+      function renderClosest(hits) {
+        const panel = $("closest-panel");
+        if (hits.length !== 1) { panel.hidden = true; return; }
+        const sel = hits[0];
+        const nearest = data
+          .filter((d) => d !== sel)
+          .map((d) => ({ d, dist: Math.hypot(d.x - sel.x, d.y - sel.y) }))
+          .sort((a, b) => a.dist - b.dist)
+          .slice(0, 10);
+        $("closest-of").textContent = `to "${sel.title}"`;
+        $("closest-list").innerHTML = nearest.map(({ d }) =>
+          `<li data-title="${escapeHtml(d.title)}"><span class="ti">${escapeHtml(d.title)}</span><span class="y">${escapeHtml(d.year)}</span></li>`
+        ).join("");
+        panel.hidden = false;
+      }
+
       async function load(n) {
-        status.textContent = cache.has(n) ? "" : "Computing corpus map (UMAP + clustering)…";
+        status.textContent = cache.has(n) ? "" : "Computing publication map (UMAP + clustering)…";
         status.hidden = cache.has(n);
         try {
           let payload = cache.get(n);
           if (!payload) { payload = await getJSON(`api/corpus-map?clusters=${n}`); if (payload.available) cache.set(n, payload); }
           if (disposed) return;
-          if (!payload.available) { status.textContent = payload.hint || "Corpus map not available."; status.hidden = false; return; }
+          if (!payload.available) { status.textContent = payload.hint || "Publication map not available."; status.hidden = false; return; }
           await loadDeck();
           if (disposed) return;
           data = payload.points;
@@ -154,6 +197,36 @@ export function corpusMapView() {
       let searchTimer = 0;
       $("paper-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => data.length && draw(), 200); });
       $("paper-search").addEventListener("change", () => data.length && draw());
+      $("closest-list").addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-title]");
+        if (li) selectPaper(li.dataset.title);
+      });
+      $("abstract-list").addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-title]");
+        if (li) selectPaper(li.dataset.title);
+      });
+      const abstractInput = $("abstract-input");
+      const abstractStatus = $("abstract-status");
+      const abstractSubmit = $("abstract-submit");
+      async function findSimilar() {
+        const text = abstractInput.value.trim();
+        if (!text) { abstractStatus.textContent = "Paste an abstract first."; return; }
+        abstractSubmit.disabled = true;
+        abstractStatus.textContent = "Searching…";
+        $("abstract-list").innerHTML = "";
+        try {
+          const r = await postJSON("api/text-similarity", { text });
+          if (!r.available) { abstractStatus.textContent = r.hint || "Not available."; return; }
+          abstractStatus.textContent = "";
+          $("abstract-list").innerHTML = r.results.map((p) =>
+            `<li data-title="${escapeHtml(p.title)}"><span class="ti">${escapeHtml(p.title)}</span>` +
+            `<span class="y">${escapeHtml(p.year)}</span><span class="sc">${Math.round(p.score * 100)}%</span></li>`
+          ).join("");
+        } catch (e) { abstractStatus.textContent = e.message; }
+        finally { abstractSubmit.disabled = false; }
+      }
+      abstractSubmit.addEventListener("click", findSimilar);
+      abstractInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) findSimilar(); });
       load(8);
 
       return () => { disposed = true; if (deckInst) { deckInst.finalize(); deckInst = null; } };

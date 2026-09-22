@@ -6,7 +6,7 @@ export function collaborationView() {
     mount(container) {
       container.innerHTML = `
         <div class="page" style="padding-bottom:0">
-          <h1>Collaboration</h1>
+          <h1>Collaboration Graph</h1>
           <p class="lede">PI co-authorship network from the cluster's publications — nodes are PIs (sized by number
             of collaborators, colored by institution), edges are shared papers (thicker = more). Click a PI to isolate
             who they publish with.</p>

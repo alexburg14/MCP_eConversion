@@ -57,6 +57,10 @@ class AssistantMessage {
     this.steps = el("div", "steps");
     this.head.append(this.steps);
     this.root.append(this.head);
+    // A real click on the disclosure triangle (not our own JS toggling it) means
+    // the user has an opinion — stop auto-opening/closing this message's dropdown.
+    this.userToggled = false;
+    this.headSummary.addEventListener("click", () => { this.userToggled = true; });
     this.bubble = el("div", "bubble");
     this.md = el("div", "md");
     this.bubble.append(this.md);
@@ -82,10 +86,11 @@ class AssistantMessage {
 
   // Live steps live inside the collapsible "Researching…" dropdown; open it as
   // soon as there's something to show, so the user watches progress without
-  // the page filling up with permanently-visible cards.
+  // the page filling up with permanently-visible cards -- unless they've
+  // already clicked it themselves, in which case that choice sticks.
   openHead() {
     this.head.classList.remove("empty");
-    this.head.open = true;
+    if (!this.userToggled) this.head.open = true;
   }
 
   ensureThink() {
@@ -171,7 +176,8 @@ class AssistantMessage {
       this.head.classList.add("empty");
     }
     // Collapse once the turn is done — the summary line stays, the detail is a click away.
-    this.head.open = false;
+    // Skip it if the user already toggled this dropdown themselves; their choice sticks.
+    if (!this.userToggled) this.head.open = false;
     if (this.text) this.foot.append(copyButton(() => this.text));
   }
 

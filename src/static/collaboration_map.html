@@ -141,10 +141,13 @@ node.call(d3.drag()
 
 const sim = d3.forceSimulation(NODES)
   .force("link", d3.forceLink(LINKS).id(d => d.id).distance(d => 46 + 26 / Math.sqrt(d.weight)).strength(.28))
-  .force("charge", d3.forceManyBody().strength(-360))
+  // Unconnected PIs (deg 0, the grey dots) have no link force pulling them in, so the same
+  // charge that spaces out the connected cluster flings them out to the edges; give them a
+  // gentler push and a stronger pull to center so they settle near the cluster, not off in a corner.
+  .force("charge", d3.forceManyBody().strength(d => d.deg ? -360 : -140))
   .force("collide", d3.forceCollide().radius(d => rOf(d) + 8).strength(.9))
   .force("center", d3.forceCenter(W / 2, H / 2))
-  .force("x", d3.forceX(W / 2).strength(.035)).force("y", d3.forceY(H / 2).strength(.05))
+  .force("x", d3.forceX(W / 2).strength(d => d.deg ? .035 : .1)).force("y", d3.forceY(H / 2).strength(d => d.deg ? .05 : .12))
   .on("tick", ticked);
 function ticked() {
   link.attr("d", d => {
