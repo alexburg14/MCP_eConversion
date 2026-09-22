@@ -478,7 +478,7 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             "title": APP_TITLE,
             "cluster": {"name": state.cfg.cluster.name, "display_name": state.cfg.cluster.display_name,
                         "website": state.cfg.cluster.website},
-            "placeholder": f"Ask about {state.n_papers} papers across {state.n_pis} PIs/groups in the cluster…",
+            "placeholder": f"Ask about {state.n_papers} papers across {state.n_pis} groups in the cluster…",
             "examples": random.sample(state.example_pool, min(N_EXAMPLES, len(state.example_pool))),
             "providers": providers,
             "routes": [dict(route) for route in llm.ROUTE_OPTIONS],
