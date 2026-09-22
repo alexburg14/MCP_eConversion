@@ -202,6 +202,7 @@ function openParams() {
   body.replaceChildren();
 
   for (const field of spec.filter((f) => !f.hidden)) {
+    const wrap = document.createElement("div");
     const label = document.createElement("label");
     label.className = "field";
     const name = document.createElement("span");
@@ -370,6 +371,10 @@ export function renderSettingsRow(store, el) {
   }
 
   const shortModel = (id) => (id || "").replace(/^.*\//, "");
+  // OpenRouter is the default, so it comes first; GWDG sits at the bottom as the
+  // fallback it is.
+  const providers = Object.entries(cfg.providers)
+    .sort((a, b) => (b[1].openrouter ? 1 : 0) - (a[1].openrouter ? 1 : 0));
   const picker = document.createElement("details");
   picker.className = "picker";
   const label = session.auto_model
@@ -377,29 +382,64 @@ export function renderSettingsRow(store, el) {
     : `${session.provider} / ${session.model}`;
   picker.innerHTML = `<summary class="chip" title="Switch model or routing">${escapeHtml(label)} \u25be</summary><div class="picker-menu"></div>`;
   const menu = picker.querySelector(".picker-menu");
-  for (const [name, prov] of Object.entries(cfg.providers)) {
+  for (const [name, prov] of providers) {
     const h = document.createElement("h4");
     h.textContent = prov.note ? `${name} \u00b7 ${prov.note}` : name;
     menu.append(h);
 
     if (prov.openrouter) {
-      // the routing choices are the model choices: all use the cheapest eligible
-      // model, they differ in how the upstream provider is picked
+      // The routing choices are the model choices: every one uses the cheapest
+      // eligible model, they differ in how the upstream provider is picked.
+      const model = session.resolved_model || "cheapest eligible";
       for (const route of cfg.routes || []) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = (name === session.provider && session.auto_model && session.sort === route.value) ? "on" : "";
-        b.innerHTML = `<b>${escapeHtml(route.label)}</b><span class="muted small">${escapeHtml(route.help)}</span>`
-          + `<span class="hint">model: ${escapeHtml(session.resolved_model || "cheapest eligible")}`
-          + ` \u00b7 \u2264 1 \u20ac/M tokens</span>`;
-        b.addEventListener("click", async () => {
+        const active = name === session.provider && session.auto_model && session.sort === route.value;
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "route" + (active ? " on" : "");
+
+        const title = document.createElement("span");
+        title.className = "title";
+        if (active) {
+          const mark = document.createElement("span");
+          mark.className = "mark";
+          mark.textContent = "\u2713";
+          title.append(mark);
+        }
+        const routeName = document.createElement("b");
+        routeName.textContent = route.label;
+        title.append(routeName);
+        if (route.value === "price") {
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = "default";
+          title.append(badge);
+        }
+        card.append(title);
+
+        const desc = document.createElement("span");
+        desc.className = "desc";
+        desc.textContent = route.help;
+        card.append(desc);
+
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        const code = document.createElement("code");
+        code.textContent = model;
+        meta.append(code);
+        const cap = document.createElement("span");
+        cap.className = "cap";
+        cap.textContent = "\u2264 1 \u20ac/M tokens";
+        meta.append(cap);
+        card.append(meta);
+
+        card.addEventListener("click", async () => {
           try {
             await postJSON("api/session/model", { provider: name, model: "", sort: route.value });
             await refreshSession();
           } catch (e) { toast(e.message, "bad"); }
           picker.open = false;
         });
-        menu.append(b);
+        menu.append(card);
       }
       continue;
     }
@@ -410,6 +450,7 @@ export function renderSettingsRow(store, el) {
       b.type = "button";
       b.className = (name === session.provider && !session.auto_model && m === session.model) ? "on" : "";
       b.textContent = m;
+      b.title = "Ask GWDG directly with " + m;
       b.addEventListener("click", async () => {
         try { await postJSON("api/session/model", { provider: name, model: m }); await refreshSession(); }
         catch (e) { toast(e.message, "bad"); }
