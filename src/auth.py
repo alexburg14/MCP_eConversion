@@ -43,6 +43,78 @@ class Identity:
         return not self.subject
 
 
+class TurnSlot:
+    """The one in-flight chat turn of a session, and who is allowed to end it.
+
+    Cancellation is cooperative -- the worker polls ``cancel`` between stream
+    chunks -- so a turn stuck on a stalled model read or a slow remote tool can
+    stay alive for minutes after a stop. The interface must not be hostage to
+    that: ``start`` cancels the sitting turn, gives it a moment to hand over,
+    and claims the slot regardless, while ``abandon`` (new chat) frees it
+    outright. Each claim bumps ``epoch``; the worker that was displaced sees a
+    stale epoch, winds down on its own, and never re-locks the session.
+    """
+
+    HANDOVER_S = 1.5
+
+    def __init__(self) -> None:
+        self._mu = threading.Lock()
+        self._handed_over = threading.Event()
+        self._handed_over.set()
+        self.epoch = 0
+        self.busy = False
+        self.cancel: threading.Event | None = None
+
+    def _claim(self) -> tuple[int, threading.Event]:
+        self.epoch += 1
+        self.busy = True
+        self.cancel = threading.Event()
+        self._handed_over.clear()
+        return self.epoch, self.cancel
+
+    def start(self, handover_s: float | None = None) -> tuple[int, threading.Event]:
+        """Claim the slot for a new turn, displacing a running one."""
+        with self._mu:
+            running = self.cancel if self.busy else None
+        if running is not None:
+            running.set()
+            self._handed_over.wait(self.HANDOVER_S if handover_s is None else handover_s)
+        with self._mu:
+            return self._claim()
+
+    def finish(self, epoch: int) -> bool:
+        """Release the slot. False when this turn was displaced meanwhile."""
+        with self._mu:
+            if epoch != self.epoch:
+                return False
+            self.busy = False
+            self.cancel = None
+            self._handed_over.set()
+            return True
+
+    def stop(self) -> bool:
+        """Ask the running turn to stop. It may take a moment to notice."""
+        with self._mu:
+            cancel = self.cancel if self.busy else None
+        if cancel is None:
+            return False
+        cancel.set()
+        return True
+
+    def abandon(self) -> bool:
+        """Free the slot now; the displaced turn's result is dropped."""
+        with self._mu:
+            if not self.busy:
+                return False
+            if self.cancel is not None:
+                self.cancel.set()
+            self.epoch += 1
+            self.busy = False
+            self.cancel = None
+            self._handed_over.set()
+            return True
+
+
 @dataclass
 class Session:
     id: str                     # telemetry id (short, anonymous) -- what goes into logs
@@ -66,8 +138,7 @@ class Session:
     turns: int = 0
     tool_calls_total: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    turn_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    cancel: threading.Event | None = field(default=None, repr=False)
+    turn: TurnSlot = field(default_factory=TurnSlot, repr=False)
 
     def invalidate_remote_schemas(self) -> None:
         self.remote_schemas = None

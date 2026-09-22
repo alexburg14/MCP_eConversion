@@ -37,12 +37,14 @@ async function boot() {
 
   initDialogs(store);
   document.getElementById("new-chat").addEventListener("click", async () => {
-    if (store.streaming && store.stop) { store.stop(); await new Promise((r) => setTimeout(r, 150)); }
+    // The server detaches a still-running turn from the old conversation, so
+    // this never has to wait for one to notice the stop.
+    if (store.streaming && store.stop) store.stop();
     try {
       await postJSON("api/chat/reset");
       await refreshSession();
       location.hash = "#/chat";
-      store.update({ resetTick: (store.resetTick || 0) + 1 });
+      store.update({ streaming: false, stop: null, resetTick: (store.resetTick || 0) + 1 });
     } catch (e) { toast(e.message, "bad"); }
   });
 

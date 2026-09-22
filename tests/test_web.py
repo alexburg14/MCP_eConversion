@@ -123,28 +123,42 @@ def _session_of(client, state):
     return state.sessions.get(client.cookies[auth.COOKIE_NAME])
 
 
-def test_busy_session_gets_409_and_reset_refuses(client, state):
-    # The test client buffers streamed bodies, so hold the turn lock directly;
-    # true interleaving is covered by test_web_live.py.
+def test_reset_detaches_a_turn_that_will_not_stop(client, state, harness):
+    # The test client buffers streamed bodies, so take the slot directly; true
+    # interleaving is covered by test_web_live.py.
     client.get("/api/session")
     session = _session_of(client, state)
-    assert session.turn_lock.acquire(blocking=False)
-    try:
-        assert client.post("/api/chat", json={"prompt": "again"}).status_code == 409
-        assert client.post("/api/chat/reset").status_code == 409
-        assert client.get("/api/session").json()["busy"] is True
-    finally:
-        session.turn_lock.release()
-    assert client.post("/api/chat/reset").status_code == 200
+    epoch, cancel = session.turn.start()
+    assert client.get("/api/session").json()["busy"] is True
+
+    r = client.post("/api/chat/reset")
+    assert r.status_code == 200 and r.json()["stopped"] is True
+    assert cancel.is_set()
+    assert client.get("/api/session").json()["busy"] is False
+    # the stuck turn eventually gives up; it must not re-lock the fresh session
+    assert session.turn.finish(epoch) is False
+    harness.scripts = [[text_chunk("after")]]
+    assert chat(client, "q").status_code == 200
+
+
+def test_a_new_prompt_displaces_a_turn_that_will_not_stop(client, state, harness):
+    client.get("/api/session")
+    session = _session_of(client, state)
+    _, cancel = session.turn.start()
+
+    harness.scripts = [[text_chunk("second")]]
+    assert chat(client, "q2").status_code == 200
+    assert cancel.is_set()
+    assert client.get("/api/session").json()["busy"] is False
 
 
 def test_stop_sets_the_running_turns_cancel_flag(client, state):
     client.get("/api/session")
     assert client.post("/api/chat/stop").json()["stopped"] is False
     session = _session_of(client, state)
-    session.cancel = threading.Event()
+    _, cancel = session.turn.start()
     assert client.post("/api/chat/stop").json()["stopped"] is True
-    assert session.cancel.is_set()
+    assert cancel.is_set()
 
 
 def test_reset_starts_a_new_conversation_with_a_new_id(client, harness):

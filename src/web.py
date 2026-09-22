@@ -301,7 +301,7 @@ def _session_view(state: AppState, session: auth.Session) -> dict:
         },
         "tools": _tools_available(state, session),
         "turns": turns,
-        "busy": session.turn_lock.locked(),
+        "busy": session.turn.busy,
         "messages": messages,
     }
 
@@ -350,8 +350,16 @@ def _count_source_tools(schemas: list[dict], kind: str) -> tuple[int, str | None
 
 def _run_turn_worker(state: AppState, session: auth.Session, resolved: dict, prompt: str,
                      turn: int, api_msgs: list[dict], put: Callable[[Any], None],
-                     cancel: threading.Event) -> None:
-    """Own one turn end to end: stream events, then commit history + telemetry."""
+                     cancel: threading.Event, epoch: int, convo: list[dict],
+                     user_msg: dict) -> None:
+    """Own one turn end to end: stream events, then commit history + telemetry.
+
+    ``convo`` is the message list this turn was started on and ``user_msg`` the
+    question it answers -- the answer is filed directly after it, by identity,
+    so a displaced turn (the user sent another prompt before this one finished)
+    lands under its own question however the list grew meanwhile. A turn whose
+    conversation was reset finds ``convo`` detached and files nothing.
+    """
     started = time.perf_counter()
     final: dict | None = None
     try:
@@ -379,9 +387,12 @@ def _run_turn_worker(state: AppState, session: auth.Session, resolved: dict, pro
                      "tools": [], "usage": {}, "tool_calls": [], "error": "no_result"}
         meta = {"model": resolved["model"], "elapsed": final["elapsed"], "tool_calls": final["tool_calls"]}
         with session.lock:
-            session.messages.append({"role": "assistant", "content": final["answer"], "meta": meta})
-            session.turns = turn
-            session.tool_calls_total += len(final["tool_calls"])
+            # False once "new chat" replaced the list this turn was writing to
+            at = _index_of(convo, user_msg) if convo is session.messages else None
+            if at is not None:
+                convo.insert(at + 1, {"role": "assistant", "content": final["answer"], "meta": meta})
+                session.turns = max(session.turns, turn)
+                session.tool_calls_total += len(final["tool_calls"])
             tools_available = _tools_available(state, session)
         # Telemetry: exactly one privacy-safe line per turn (hashes and lengths
         # only). Raw prompt/answer text never enters the log.
@@ -391,9 +402,17 @@ def _run_turn_worker(state: AppState, session: auth.Session, resolved: dict, pro
             rounds=final["rounds"], tools=final["tools"], prompt=prompt, answer=final["answer"],
             usage=final["usage"], latency_ms=(final["elapsed"] or 0) * 1000, error=final["error"],
         )
-        session.cancel = None
-        session.turn_lock.release()
+        session.turn.finish(epoch)
         put(None)
+
+
+def _index_of(messages: list[dict], msg: dict) -> int | None:
+    """Position of ``msg`` by identity -- indices shift when a displaced turn
+    files its answer between the messages of a later one."""
+    for i, m in enumerate(messages):
+        if m is msg:
+            return i
+    return None
 
 
 def _sse_frame(event: dict) -> str:
@@ -650,17 +669,15 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
 
     @app.post("/api/chat/reset")
     def reset(session: auth.Session = Depends(get_session)):
-        if session.turn_lock.locked():
-            raise HTTPException(409, detail={"error": "A response is still being generated; stop it first."})
+        # A running turn must never block this: it is cancelled and detached
+        # from the conversation it was writing to (see _run_turn_worker).
+        stopped = session.turn.abandon()
         state.sessions.reset(session)
-        return {"ok": True, "session": session.id}
+        return {"ok": True, "session": session.id, "stopped": stopped}
 
     @app.post("/api/chat/stop")
     def stop(session: auth.Session = Depends(get_session)):
-        cancel = session.cancel
-        if cancel is not None:
-            cancel.set()
-        return {"ok": True, "stopped": cancel is not None}
+        return {"ok": True, "stopped": session.turn.stop()}
 
     @app.post("/api/chat")
     async def chat(req: ChatRequest, request: Request,
@@ -679,17 +696,18 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
                 {"error": f"No API key for provider '{resolved['provider']}' — set {env} in the "
                           f"environment or in .env at the repo root and restart the app."},
                 status_code=400)
-        if not session.turn_lock.acquire(blocking=False):
-            return JSONResponse({"error": "A response is already being generated for this session."},
-                                status_code=409)
+        # A turn already in flight is cancelled and displaced rather than
+        # refused: cancellation is cooperative, so a stuck turn would otherwise
+        # lock the user out of their own session until it happened to notice.
+        epoch, cancel = await run_in_threadpool(session.turn.start)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
-        cancel = threading.Event()
-        session.cancel = cancel
         with session.lock:
-            session.messages.append({"role": "user", "content": prompt})
+            convo = session.messages
+            user_msg = {"role": "user", "content": prompt}
+            convo.append(user_msg)
             turn = session.turns + 1
-            api_msgs = [{"role": m["role"], "content": m["content"]} for m in session.messages]
+            api_msgs = [{"role": m["role"], "content": m["content"]} for m in convo]
 
         def put(ev: Any) -> None:
             try:
@@ -698,7 +716,7 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
                 pass
 
         state.executor.submit(_run_turn_worker, state, session, resolved, prompt, turn,
-                              api_msgs, put, cancel)
+                              api_msgs, put, cancel, epoch, convo, user_msg)
 
         async def stream():
             try:

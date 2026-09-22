@@ -71,12 +71,18 @@ def harness():
 @pytest.fixture()
 def state(harness, tmp_path, monkeypatch, isolated_logs):
     """A fake AppState for the web tests: fake LLM, stub corpus callables, temp feedback file."""
+    import llm
     import telemetry
     import web
     from config import get_config
 
     monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.delenv("ECONVERSION_API_KEY", raising=False)  # the deployment .env's name, a fallback
+    # A developer's .env otherwise leaks in through create_app -> load_dotenv and
+    # changes which provider these tests resolve to.
+    monkeypatch.setattr(llm, "load_dotenv", lambda *a, **k: None)
+    for var in ("OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(telemetry, "FEEDBACK_FILE", tmp_path / "feedback.jsonl")
     cfg = get_config()
     return web.AppState(

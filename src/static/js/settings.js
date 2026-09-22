@@ -323,8 +323,17 @@ export function propagateTheme(iframe) {
   } catch { /* cross-origin (registration pages) */ }
 }
 
+/** Native dialogs only close on Esc or the ✕; make the backdrop dismiss them too.
+ *  The mousedown check keeps a selection drag that ends on the backdrop from closing. */
+function closeOnBackdropClick(dlg) {
+  let fromBackdrop = false;
+  dlg.addEventListener("mousedown", (e) => { fromBackdrop = e.target === dlg; });
+  dlg.addEventListener("click", (e) => { if (fromBackdrop && e.target === dlg) dlg.close("cancel"); });
+}
+
 export function initDialogs(s) {
   store = s;
+  for (const dlg of document.querySelectorAll("dialog.dlg")) closeOnBackdropClick(dlg);
   applyTheme(currentTheme());
   document.getElementById("theme-seg").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-theme]");
