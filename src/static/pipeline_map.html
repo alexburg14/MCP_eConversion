@@ -21,6 +21,8 @@
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px -18px rgba(0,0,0,.7);
     }
   }
+  /* an explicit light choice keeps the light palette even if the OS is dark */
+  :root[data-theme="light"] { color-scheme: light; }
   :root[data-theme="dark"] {
     --ground: #0F1318; --panel: #171C22; --ink: #EAEDF1; --ink-2: #C0C7D0;
     --muted: #8B94A0; --faint: #616B77; --hair: #262C34; --hair-2: #333B45;
@@ -104,7 +106,7 @@
   <div id="board"><svg id="wires"></svg></div>
 
   <div class="detail" id="detail">
-    <div class="intro">Six stages, top to bottom: raw <b>sources</b> become local <b>caches</b> via <b>build scripts</b>; those caches back the MCP <b>tools</b> the agent calls; one <b>registry</b> exposes the tools to both <b>delivery</b> surfaces &mdash; the stdio MCP server and the Streamlit app. Click a node to light everything it's built from, plus the one thing it directly produces.</div>
+    <div class="intro">Six stages, top to bottom: raw <b>sources</b> become local <b>caches</b> via <b>build scripts</b>; those caches back the MCP <b>tools</b> the agent calls; one <b>registry</b> exposes the tools to both <b>delivery</b> surfaces &mdash; the stdio MCP server and the web app. Click a node to light everything it's built from, plus the one thing it directly produces.</div>
   </div>
 </div>
 
@@ -160,7 +162,7 @@ const NODES = [
   {id:"reg", lane:"registry", n:"FastMCP + openai_tools", s:"single source of truth", d:"Local tools are defined with @mcp.tool() in server.py; the openai_tools bridge derives OpenAI schemas from that registry, so the MCP server and chat app never drift."},
 
   {id:"d_mcp", lane:"delivery", n:"MCP server (stdio)", s:".mcp.json · econversion", d:"python src/server.py — the 15 local tools over stdio to Claude and other MCP clients."},
-  {id:"d_app", lane:"delivery", n:"Streamlit app", s:"Chat · maps", d:"src/app.py — chat tool-use loop, corpus map, collaboration and pipeline views."},
+  {id:"d_app", lane:"delivery", n:"Web app", s:"Chat · maps", d:"src/web.py + src/static — FastAPI app: streaming chat tool-use loop, corpus map, collaboration and pipeline views."},
   {id:"d_llm", lane:"delivery", n:"Multi-provider LLM", s:"gwdg · openrouter", d:"Sidebar provider select; OpenRouter auto-picks the cheapest guardrail-passing model."},
   {id:"d_panel", lane:"delivery", n:"Data-source panel", s:"BYOK eLab/DataTagger", d:"Where a user pastes personal tokens to attach their own lab data to the chat."},
   {id:"d_feedback", lane:"delivery", n:"Feedback form", s:"JSONL log", d:"Per-answer bug-report / general feedback, appended to data/feedback/feedback.jsonl."},

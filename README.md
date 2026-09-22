@@ -58,44 +58,105 @@ automatically.
 `[cluster]` also carries optional identity metadata (`cluster_id`, `funding_body`,
 `host_institutions`, `participating_institutions`) — for e-conversion these were
 scraped from e-conversion.de on 2026-09-04. They're injected into the system prompt
-and shown in the sidebar when set, and default to empty so a fork's `config.toml`
+and default to empty so a fork's `config.toml`
 doesn't need them.
 
 ## Feedback
 
-The chat UI shows a "💬 Feedback" popover under each answer, for reporting a bug
-or leaving general feedback (free text, not a rating). Submissions are appended
+The chat UI has a "💬 Feedback" button below the chat box, for reporting a bug
+or leaving general feedback (free text, not a rating) about the last answer. Submissions are appended
 as JSONL to `data/feedback/feedback.jsonl` — question, answer, model, category,
 and text, one record per line — for later review. There's no external feedback
-service wired up; this is local-only, matching the single-user setup.
+service wired up; this is local-only.
 
 ## Tests
 
 ```bash
-python -m pytest tests/
+python -m pytest tests/                       # everything (needs the built caches)
+python -m pytest tests/ -m "not integration"  # hermetic subset, runs on a fresh clone
 ```
 
-Unit tests over the domain logic — BM25 search, PI name normalization and lookup,
-the collaboration graph, NOMAD input validation, and the MCP→OpenAI tool bridge.
-They import the `src/` modules directly (never the Streamlit app), so they double
-as a regression harness independent of the UI. They assert against the built
-caches, so run `python build.py` first if `data/` is empty.
+Two kinds of tests: hermetic ones cover the streamed agent loop, sessions, the HTTP
+API and telemetry with a scripted fake LLM (`tests/fakes.py`), no caches or network
+needed. The `integration`-marked ones (BM25 search, PI lookup, the collaboration
+graph, NOMAD input validation, the MCP→OpenAI tool bridge) import `src/server.py` and
+assert against the real caches, so run `python build.py` first if `data/` is empty.
 
 ## Chat interface
 
-A Streamlit web app that lets researchers ask questions in natural language. It calls the search tools internally and uses an LLM from the GWDG SAIA / Academic Cloud Chat AI endpoint (OpenAI-compatible, `https://chat-ai.academiccloud.de/v1`) to synthesize answers. The model is selectable in the sidebar (default `qwen3.5-122b-a10b`; all listed models verified for tool calling).
+A web app (FastAPI backend, static vanilla-JS frontend, no build step) that lets
+researchers ask questions in natural language. The assistant runs a tool-use loop
+against the MCP tools and an LLM from the GWDG SAIA / Academic Cloud Chat AI endpoint
+(OpenAI-compatible, `https://chat-ai.academiccloud.de/v1`); the answer **streams**
+token by token and every tool call shows up live as a collapsible step. Model and
+provider are selectable below the chat box (`config.toml` lists them; the default is
+the `[llm]` block's `default_model`). Three more pages: Corpus Map (UMAP of the
+embeddings) and Collaboration (PI co-authorship graph); the Pipeline lineage map lives in the
+"Stats for nerds" dialog behind the header menu, next to the light/dark switch.
 
 Put the SAIA key in `.env` at the repo root (`API_KEY=...`) or export it, then:
 
 ```bash
-streamlit run src/app.py
+uvicorn main:app --app-dir src --port 8000 --reload
 ```
 
-SAIA keys expire after 6 months — renew at https://saia.gwdg.de/dashboard.
+and open http://localhost:8000. SAIA keys expire after 6 months — renew at
+https://saia.gwdg.de/dashboard.
+
+How it fits together:
+
+- `src/agent.py` — the loop: streamed `chat.completions` with tool-call delta
+  accumulation, up to 10 tool rounds, cancellation. A sync generator of events.
+- `src/web.py` — the FastAPI app: `POST /api/chat` returns Server-Sent Events
+  (`start`, `round`, `text_delta`, `reasoning_delta`, `tool_call_start`,
+  `tool_call_end`, `done` / `error`); the turn runs in a worker thread and is logged
+  exactly once, even if the browser disconnects mid-way. JSON endpoints back the
+  session, model choice, remote-source tokens, feedback, stats and the two maps.
+- `src/auth.py` — server-side sessions keyed by an HttpOnly cookie. The conversation,
+  model choice and the user's eLabFTW / DataTagger tokens live there, scoped to one
+  browser session (never to the process). `get_identity()` is the hook for a real
+  login: today it reads an optional proxy header (`AUTH_HEADER`, default
+  `X-Forwarded-User`) and is otherwise anonymous.
+- `src/static/` — `index.html` + ES modules (`chat.js`, `settings.js`, `views/*`);
+  the two map pages are self-contained HTML files fetching their data from the API.
+
+Environment variables: `API_KEY` (or `ECONVERSION_API_KEY`, the compose stack's name for it), `OPENROUTER_API_KEY`, `ROOT_PATH` (serve under a
+URL prefix when the reverse proxy forwards the full path, e.g.
+`/nomad-oasis/api/everse`), `AUTH_HEADER`, `COOKIE_SECURE`, `CHAT_WORKERS`
+(concurrent turns, default 8), `SESSION_TTL_S`, `LOG_DIR`, `LOG_TOOL_ARGS`,
+`FEEDBACK_FILE`, `GIT_SHA` / `BUILD_TIME`. Sessions are in-memory, so run a single
+worker process.
+
+Porting: [`docs/porting-to-cra.md`](docs/porting-to-cra.md) maps every file here to its place in
+the planned `cluster-research-assist` package and lists what was learned about the GWDG endpoint
+and the deployment that the port must keep.
+
+Design note: this is the interim e-verse frontend inside this repository (it
+replaces Streamlit, which could not stream a tool loop and kept one user's tokens in
+process-global state). The CRA redesign's ADR-2 leans towards HTMX + Jinja; this
+vanilla-JS single page is the outcome of that spike — one static HTML file, no Node
+toolchain, and a stop button / live tool steps that a fetch-based SSE client gives
+for free.
+
+### Deployment
+
+```bash
+docker build --build-arg GIT_SHA=$(git rev-parse --short HEAD) \
+             --build-arg BUILD_TIME=$(date -u +%FT%TZ) -t econverse .
+docker run -p 8501:8501 -v $PWD/data:/app/data -v $PWD/logs:/app/logs --env-file .env econverse
+```
+
+The image listens on `PORT` (default 8501, the port the existing compose/nginx setup
+already routes to), builds any missing cache on first start (`docker/entrypoint.sh`)
+and exposes `GET /api/health` for a health check. In the `unified-researchdata-mcp`
+stack, point the `econversion` service at this Dockerfile (`context: ./econversion`)
+and set `ROOT_PATH=/nomad-oasis/api/everse`; the nginx `location` that proxies to
+`econversion:8501/nomad-oasis/api/everse/` keeps working unchanged. SSE needs
+`proxy_buffering off` or the `X-Accel-Buffering: no` header the app already sends.
 
 ## Layout
 
-Runtime code (server, search, chat app) lives under `src/`; one-shot build and extract scripts live under `src/scripts/`. Everything data lives under `data/`, split into two layers: `data/sources/` holds ground-truth inputs — the publications CSV, the EndNote library, the proposal PDF, and the locally-supplied full-text PDFs under `data/sources/pdfs/` — which are never regenerated; `data/cache/` holds everything the build scripts produce. The `data/` directory is gitignored — the caches are built locally, and the source inputs must be placed under `data/sources/` (see below).
+Runtime code (server, search, chat backend and frontend) lives under `src/`; one-shot build and extract scripts live under `src/scripts/`. Everything data lives under `data/`, split into two layers: `data/sources/` holds ground-truth inputs — the publications CSV, the EndNote library, the proposal PDF, and the locally-supplied full-text PDFs under `data/sources/pdfs/` — which are never regenerated; `data/cache/` holds everything the build scripts produce. The `data/` directory is gitignored — the caches are built locally, and the source inputs must be placed under `data/sources/` (see below).
 
 ## Rebuilding the caches
 
@@ -171,6 +232,13 @@ Reads `data/sources/EXC_2089_e-conversion_A_Proposal_R.pdf` and writes two outpu
 | `src/config.py` | Loads `config.toml` once into a frozen, typed `Config` object via `get_config()` |
 | `src/server.py` | MCP server entry point — the single source of truth for all tool definitions |
 | `src/openai_tools.py` | Derives the chat app's OpenAI tool schemas and dispatch from the MCP registry — no hand-maintained duplicate |
+| `src/agent.py` | The streamed tool-use loop (sync generator of events), independent of any transport |
+| `src/web.py`, `src/main.py` | FastAPI app factory (SSE chat, JSON API, static files) and the uvicorn entry point |
+| `src/auth.py` | Cookie sessions, per-session remote tokens, the identity hook for a future login |
+| `src/llm.py`, `src/prompts.py`, `src/views.py` | Provider/model resolution (incl. OpenRouter discovery), system-prompt composition, corpus-map / graph payloads |
+| `src/static/` | The frontend: `index.html`, `css/app.css`, `js/*.js`, plus the self-contained collaboration and pipeline map pages |
+| `src/mcp_clients.py` | MCP client for the remote eLabFTW / DataTagger proxies (bring-your-own-token) |
+| `Dockerfile`, `docker/entrypoint.sh` | Container image; the entrypoint builds missing caches, then serves with uvicorn |
 | `src/search.py` | Two-stage BM25 search engine + abstracts/metadata cache reader |
 | `src/semantic_search.py` | BGE-small cosine search; lazy-loads model and embeddings on first call |
 | `src/nomad_search.py` | Live query against the public NOMAD API (no cache, no credentials) |

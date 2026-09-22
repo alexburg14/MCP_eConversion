@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+data
+logs
+__pycache__
+**/__pycache__
+.pytest_cache
+.claude
+.cc-history
+*.pptx
+.env

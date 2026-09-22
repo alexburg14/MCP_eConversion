@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>e-Converse</title>
+<link rel="icon" type="image/svg+xml" href="static/logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="static/css/app.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@18.0.13/lib/marked.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="logo-mark" viewBox="0 0 128 128"><g transform="translate(11,15)">
+    <!-- top row -->
+    <circle cx="35" cy="17" r="16" fill="var(--logo-ink, #1B1F2E)"/>
+    <circle cx="71" cy="17" r="16" fill="var(--logo-ink, #1B1F2E)"/>
+    <!-- middle row -->
+    <circle cx="17" cy="49" r="16" fill="var(--logo-ink, #1B1F2E)"/>
+    <circle cx="53" cy="49" r="16" fill="#C8FF4E"/>
+    <circle cx="89" cy="49" r="16" fill="var(--logo-ink, #1B1F2E)"/>
+    <!-- bottom row -->
+    <circle cx="35" cy="81" r="16" fill="var(--logo-ink, #1B1F2E)"/>
+    <circle cx="71" cy="81" r="16" fill="var(--logo-ink, #1B1F2E)"/>
+    <!-- terminals -->
+    <circle cx="35" cy="17" r="5.5" fill="#C8FF4E"/>
+    <circle cx="71" cy="17" r="5.5" fill="#C8FF4E"/>
+    <circle cx="17" cy="49" r="5.5" fill="#C8FF4E"/>
+    <circle cx="53" cy="49" r="5.5" fill="var(--logo-ink, #1B1F2E)"/>
+    <circle cx="89" cy="49" r="5.5" fill="#C8FF4E"/>
+    <circle cx="35" cy="81" r="5.5" fill="#C8FF4E"/>
+    <circle cx="71" cy="81" r="5.5" fill="#C8FF4E"/>
+  </g>
+</symbol></svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H9l-4.2 3.4c-.4.3-.8 0-.8-.5V5.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="6" cy="17" r="2.2"/><circle cx="11" cy="8" r="2.2"/><circle cx="17.5" cy="13" r="2.2"/><circle cx="18" cy="5" r="1.5"/><circle cx="13" cy="18.5" r="1.5"/></g></symbol>
+  <symbol id="i-graph" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12.00" cy="5.30" r="2.4"/><circle cx="18.50" cy="16.55" r="2.4"/><circle cx="5.50" cy="16.55" r="2.4"/><path d="M13.20 7.38L17.30 14.47M16.10 16.55L7.90 16.55M6.70 14.47L10.80 7.38"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-research" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></g></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></g></symbol>
+</svg>
+<header class="top">
+  <a class="brand" href="#/chat" title="e-Converse"><svg class="logo" aria-hidden="true"><use href="#logo-mark"/></svg><span class="brand-name">e-Converse</span></a>
+  <nav class="nav" id="nav">
+    <a href="#/chat" data-route="chat"><svg class="ico"><use href="#i-chat"/></svg><span>Chat</span></a>
+    <a href="#/corpus-map" data-route="corpus-map"><svg class="ico"><use href="#i-map"/></svg><span>Corpus Map</span></a>
+    <a href="#/collaboration" data-route="collaboration"><svg class="ico"><use href="#i-graph"/></svg><span>Collaboration</span></a>
+  </nav>
+  <div class="top-actions">
+    <span class="user" id="user-label" hidden></span>
+    <button class="btn ghost" id="new-chat" title="Start a new conversation">New chat</button>
+    <details class="menu" id="menu">
+      <summary class="btn ghost icon" title="Menu" aria-label="Menu"><svg class="ico"><use href="#i-more"/></svg></summary>
+      <div class="menu-panel">
+        <div class="menu-label">Appearance</div>
+        <div class="seg" id="theme-seg" role="radiogroup">
+          <button type="button" data-theme="system">System</button>
+          <button type="button" data-theme="light">Light</button>
+          <button type="button" data-theme="dark">Dark</button>
+        </div>
+        <hr>
+        <button type="button" class="menu-item" id="stats-btn">Stats for nerds</button>
+      </div>
+    </details>
+  </div>
+</header>
+
+<main id="view" class="view"></main>
+
+<dialog id="dlg-connect" class="dlg wide">
+  <form method="dialog" class="dlg-body">
+    <header class="dlg-head">
+      <h2 id="connect-title">Connect</h2>
+      <button class="btn ghost icon" value="cancel" aria-label="Close">✕</button>
+    </header>
+    <p class="muted" id="connect-hint">Register below — you stay inside the app. Then paste the token.</p>
+    <div class="iframe-wrap"><iframe id="connect-frame" title="Registration" referrerpolicy="no-referrer"
+    sandbox="allow-forms allow-scripts"></iframe></div>
+    <p class="muted small">If the form does not load here, <a id="connect-link" href="#" target="_blank" rel="noopener">open it in a new tab</a>.</p>
+    <label class="field">
+      <span id="connect-label">Token</span>
+      <input type="password" id="connect-token" autocomplete="off" placeholder="Paste the token from the form above">
+    </label>
+    <p class="error" id="connect-error" hidden></p>
+    <footer class="dlg-foot">
+      <button type="button" class="btn danger ghost" id="connect-disconnect">Disconnect</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" id="connect-submit">Connect</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="dlg-feedback" class="dlg">
+  <form method="dialog" class="dlg-body" id="feedback-form">
+    <header class="dlg-head">
+      <h2>Feedback</h2>
+      <button class="btn ghost icon" value="cancel" aria-label="Close">✕</button>
+    </header>
+    <p class="muted">Report a bug or leave a note about the last answer. The question and answer are attached.</p>
+    <div class="radio-row" id="feedback-category">
+      <label><input type="radio" name="category" value="Bug report" checked> Bug report</label>
+      <label><input type="radio" name="category" value="General feedback"> General feedback</label>
+    </div>
+    <label class="field">
+      <span>What happened, or what would you like to see?</span>
+      <textarea id="feedback-text" rows="5" maxlength="5000"></textarea>
+    </label>
+    <p class="error" id="feedback-error" hidden></p>
+    <footer class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" id="feedback-submit">Submit</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="dlg-stats" class="dlg wide tall">
+  <form method="dialog" class="dlg-body">
+    <header class="dlg-head">
+      <h2>Stats for nerds</h2>
+      <button class="btn ghost icon" value="cancel" aria-label="Close">✕</button>
+    </header>
+    <div id="stats-body" class="stats"><p class="muted">Loading…</p></div>
+    <details class="pipeline-box" id="pipeline-box">
+      <summary>Pipeline map — every source, script, cache and tool behind the assistant. Click a box to trace what it is built from.</summary>
+      <iframe id="pipeline-frame" title="Pipeline map" data-src="static/pipeline_map.html"></iframe>
+    </details>
+  </form>
+</dialog>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script type="module" src="static/js/app.js"></script>
+</body>
+</html>

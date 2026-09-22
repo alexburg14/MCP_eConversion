@@ -20,6 +20,8 @@
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px -18px rgba(0,0,0,.7);
     }
   }
+  /* an explicit light choice keeps the light palette even if the OS is dark */
+  :root[data-theme="light"] { color-scheme: light; }
   :root[data-theme="dark"] {
     --ground: #0F1318; --panel: #171C22; --ink: #EAEDF1; --ink-2: #C0C7D0;
     --muted: #8B94A0; --faint: #616B77; --hair: #262C34; --hair-2: #333B45; --edge: #3A4653;
@@ -91,8 +93,10 @@
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script>
-const NODES = __NODES__;
-const LINKS = __LINKS__;
+// Served by the FastAPI app: the graph comes from its API (relative URL, so
+// the page works under any prefix). Everything below runs once it has loaded.
+fetch("../api/collaboration-graph").then((r) => r.ok ? r.json() : r.json().then((e) => Promise.reject(new Error(e.hint || e.error))))
+.then(({ nodes: NODES, links: LINKS }) => {
 const INST = { TUM:{k:"tum",l:"TUM",n:"Technical University of Munich"}, LMU:{k:"lmu",l:"LMU",n:"Ludwig-Maximilians-Universität"},
   FHI:{k:"fhi",l:"FHI",n:"Fritz Haber Institute"}, "MPI FKF":{k:"mpi",l:"MPI",n:"Max Planck Institute FKF"} };
 const instK = n => INST[n.inst] ? INST[n.inst].k : "other";
@@ -184,4 +188,5 @@ function showCard(id) {
 for (let i = 0; i < 260; i++) sim.tick();
 ticked();
 addEventListener("resize", () => { W = frame.clientWidth; H = frame.clientHeight; svg.attr("viewBox", [0, 0, W, H]); sim.force("center", d3.forceCenter(W / 2, H / 2)).alpha(.2).restart(); });
+}).catch((err) => { document.getElementById("hint").textContent = err.message || "Collaboration graph not built. Run: python build.py graph"; });
 </script>

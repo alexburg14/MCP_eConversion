@@ -3,6 +3,9 @@
 The NOMAD tests deliberately exercise only the no-filter validation path, which
 returns before any HTTP call — the suite must not depend on the network.
 """
+import pytest
+
+pytestmark = pytest.mark.integration  # imports the real caches
 import graph
 import nomad_search
 

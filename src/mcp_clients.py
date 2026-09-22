@@ -9,8 +9,9 @@ whatever the token allows is exactly what the chat exposes.
 
 Design notes
 ------------
-* Tokens are per-user, per-session (BYOK).  They are kept in Streamlit
-  session state -- never logged.
+* Tokens are per-user, per-session (BYOK).  They live in the server-side
+  session (auth.Session) and are passed explicitly -- never logged, never in
+  module state.
 * Auth transport differs per proxy:
     - elabmcp-proxy reads the token ONLY from the URL query (?token=...),
       not from a header (verified 2026-09).
@@ -25,8 +26,6 @@ Design notes
 from __future__ import annotations
 
 import json
-import os
-import time
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -36,12 +35,6 @@ from mcp.client.streamable_http import streamablehttp_client
 from logging_config import get_logger
 
 log = get_logger("mcp_clients")
-
-# Remote tool schemas are fetched per turn by design (the token decides what is
-# exposed), but a tools/list round trip per question is pure overhead while the
-# token does not change. Shared across sessions, keyed by the token pair.
-_TOOLS_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
-_TOOLS_CACHE_TTL = float(os.environ.get("MCP_TOOLS_CACHE_TTL", "300"))
 
 # The two *already running* MCP endpoints on the researchmcp stack.
 # URL_PREFIX of each proxy is baked into its public path (/el, /dt).
@@ -182,27 +175,7 @@ class RemoteClients:
         return out
 
     def build_openai_tools(self) -> list[dict[str, Any]]:
-        """Fetch remote tools and return OpenAI schemas (namespaced).
-
-        Cached per token pair for MCP_TOOLS_CACHE_TTL seconds -- see _TOOLS_CACHE.
-        """
-        key = (self.elab_token or "", self.dt_token or "")
-        hit = _TOOLS_CACHE.get(key)
-        now = time.time()
-        if hit and (now - hit[0]) < _TOOLS_CACHE_TTL:
-            return hit[1]
-        schemas = self._fetch_schemas()
-        # Cache only usable results for a real token: an unavailable-source
-        # placeholder must be retried on the next turn (the source may recover),
-        # and without a token there is nothing remote to remember.
-        if (key[0] or key[1]) and not any(
-            "__unavailable__" in t["function"]["name"] for t in schemas
-        ):
-            _TOOLS_CACHE[key] = (now, schemas)
-        return schemas
-
-    def _fetch_schemas(self) -> list[dict[str, Any]]:
-        """One tools/list round trip per active source (see build_openai_tools)."""
+        """Fetch remote tools and return OpenAI schemas (namespaced)."""
         schemas: list[dict[str, Any]] = []
         for prefix, url, token, mode in self.active:
             try:

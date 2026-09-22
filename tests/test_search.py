@@ -1,4 +1,7 @@
 """BM25 search and exhaustive metadata listing."""
+import pytest
+
+pytestmark = pytest.mark.integration  # imports the real caches
 import json
 
 import server

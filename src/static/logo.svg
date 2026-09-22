@@ -1,0 +1,22 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+<g transform="translate(11,15)">
+    <!-- top row -->
+    <circle cx="35" cy="17" r="16" fill="#1B1F2E"/>
+    <circle cx="71" cy="17" r="16" fill="#1B1F2E"/>
+    <!-- middle row -->
+    <circle cx="17" cy="49" r="16" fill="#1B1F2E"/>
+    <circle cx="53" cy="49" r="16" fill="#C8FF4E"/>
+    <circle cx="89" cy="49" r="16" fill="#1B1F2E"/>
+    <!-- bottom row -->
+    <circle cx="35" cy="81" r="16" fill="#1B1F2E"/>
+    <circle cx="71" cy="81" r="16" fill="#1B1F2E"/>
+    <!-- terminals -->
+    <circle cx="35" cy="17" r="5.5" fill="#C8FF4E"/>
+    <circle cx="71" cy="17" r="5.5" fill="#C8FF4E"/>
+    <circle cx="17" cy="49" r="5.5" fill="#C8FF4E"/>
+    <circle cx="53" cy="49" r="5.5" fill="#1B1F2E"/>
+    <circle cx="89" cy="49" r="5.5" fill="#C8FF4E"/>
+    <circle cx="35" cy="81" r="5.5" fill="#C8FF4E"/>
+    <circle cx="71" cy="81" r="5.5" fill="#C8FF4E"/>
+  </g>
+</svg>

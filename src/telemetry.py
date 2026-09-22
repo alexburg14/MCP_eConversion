@@ -1,12 +1,13 @@
 """Usage telemetry for the e-conversion knowledge assistant.
 
 Writes one JSON line per chat turn (``assistant.chat``) and turns those lines
-back into the numbers rendered in the sidebar.
+back into the numbers shown in the stats panel.
 
 Privacy rule (user-mandated, 2026-09-21): raw user prompts and assistant
 answers are NEVER written to the log. Log records carry only lengths and
-SHA-256 prefixes. Raw content is persisted exclusively in the report store
-(``reports/reports.jsonl``), and only when the user presses "Report problem".
+SHA-256 prefixes. Raw content is persisted exclusively in the feedback store
+(``data/feedback/feedback.jsonl``), and only when the user submits the
+feedback form.
 
 Tool arguments are hashed by default (they contain the user's search queries,
 i.e. prompt text); set ``LOG_TOOL_ARGS=1`` to log them verbatim for debugging.
@@ -16,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +32,7 @@ FEEDBACK_FILE = Path(os.environ.get("FEEDBACK_FILE") or
 LOG_TOOL_ARGS = os.environ.get("LOG_TOOL_ARGS", "0").strip().lower() not in ("", "0", "false", "no")
 
 _startup_logged = False
+_feedback_lock = threading.Lock()
 
 
 def digest(text: str | None, n: int = 12) -> str:
@@ -101,7 +104,7 @@ def tool_call_meta(name: str, args: dict, ms: float, ok: bool) -> dict:
 
 
 def log_startup(*, tools_local: int, tools_remote: int, providers, models) -> None:
-    """One startup line per process (not per Streamlit rerun)."""
+    """One startup line per process."""
     global _startup_logged
     if _startup_logged:
         return
@@ -185,6 +188,37 @@ def log_feedback(*, category: str, session: str, model: str,
         **version_info()}})
 
 
+def record_feedback(*, question: str, answer: str, model: str, provider: str,
+                    session: str, category: str, text: str) -> dict:
+    """Append one feedback record (bug report or general note on a question/answer
+    pair) to the feedback store as JSONL and log a metadata-only line.
+
+    Provenance fields (session/model/build) make a report traceable to the turn
+    it came from. This is the only place raw question/answer text is persisted.
+    """
+    FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ver = version_info()
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "provider": provider,
+        "session": session,
+        "git_sha": ver["git_sha"],
+        "build_time": ver["build_time"],
+        "question": question,
+        "answer": answer,
+        "category": category,
+        "text": text,
+    }
+    with _feedback_lock, FEEDBACK_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    log_feedback(
+        category=category, session=session, model=model, text_len=len(text),
+        question_len=len(question or ""), answer_len=len(answer or ""),
+    )
+    return entry
+
+
 def count_feedback() -> int:
     if not FEEDBACK_FILE.exists():
         return 0
@@ -196,7 +230,7 @@ def count_feedback() -> int:
 
 
 def summarize(turns: list[dict] | None = None) -> dict:
-    """Aggregate turns into the numbers shown in the sidebar."""
+    """Aggregate turns into the numbers shown in the stats panel."""
     turns = read_turns() if turns is None else turns
     tools: dict[str, dict] = {}
     models: dict[str, int] = {}
