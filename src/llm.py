@@ -199,7 +199,6 @@ PARAM_SPEC: tuple[dict[str, Any], ...] = (
      "help": "OpenRouter picks the upstream provider by price, throughput or latency."},
 )
 PARAM_KEYS = tuple(spec["key"] for spec in PARAM_SPEC)
-_BOOL_KEYS = tuple(spec["key"] for spec in PARAM_SPEC if spec["type"] == "bool")
 # Sent in OpenRouter's extra_body instead of a top-level request field.
 EXTRA_BODY_KEYS = ("provider", "reasoning", "reasoning_effort", "verbosity",
                     "web_search_options", "models", "transforms", "route")
