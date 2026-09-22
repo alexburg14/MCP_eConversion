@@ -41,6 +41,7 @@
   <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></g></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-research" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></g></symbol>
+  <symbol id="i-pipeline" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="6" height="4.5" rx="1"/><rect x="14.5" y="4" width="6" height="4.5" rx="1"/><rect x="9" y="15.5" width="6" height="4.5" rx="1"/><path d="M6.5 8.5v3a2 2 0 0 0 2 2h1M17.5 8.5v3a2 2 0 0 0-2 2h-1"/></g></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></g></symbol>
 </svg>
 <header class="top">
@@ -49,6 +50,7 @@
     <a href="#/chat" data-route="chat"><svg class="ico"><use href="#i-chat"/></svg><span>Chat</span></a>
     <a href="#/corpus-map" data-route="corpus-map"><svg class="ico"><use href="#i-map"/></svg><span>Corpus Map</span></a>
     <a href="#/collaboration" data-route="collaboration"><svg class="ico"><use href="#i-graph"/></svg><span>Collaboration</span></a>
+    <a href="#/pipeline" data-route="pipeline"><svg class="ico"><use href="#i-pipeline"/></svg><span>Pipeline</span></a>
   </nav>
   <div class="top-actions">
     <span class="user" id="user-label" hidden></span>
@@ -156,10 +158,6 @@
       <button class="btn ghost icon" value="cancel" aria-label="Close">✕</button>
     </header>
     <div id="stats-body" class="stats"><p class="muted">Loading…</p></div>
-    <details class="pipeline-box" id="pipeline-box">
-      <summary>Pipeline map — every source, script, cache and tool behind the assistant. Click a box to trace what it is built from.</summary>
-      <iframe id="pipeline-frame" title="Pipeline map" data-src="static/pipeline_map.html"></iframe>
-    </details>
   </form>
 </dialog>
 

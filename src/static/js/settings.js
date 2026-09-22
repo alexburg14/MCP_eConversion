@@ -350,11 +350,6 @@ export function initDialogs(s) {
     if (e.key === "Escape") for (const d of popovers()) d.open = false;
   });
   document.getElementById("stats-btn").addEventListener("click", () => { menu.open = false; openStats(); });
-  const box = document.getElementById("pipeline-box");
-  box.addEventListener("toggle", () => {
-    const f = document.getElementById("pipeline-frame");
-    if (box.open && !f.src) { f.src = f.dataset.src; f.addEventListener("load", () => propagateTheme(f), { once: true }); }
-  });
   document.getElementById("params-apply").addEventListener("click", applyParams);
   document.getElementById("params-reset").addEventListener("click", resetParams);
   document.getElementById("connect-register").addEventListener("click", submitRegister);

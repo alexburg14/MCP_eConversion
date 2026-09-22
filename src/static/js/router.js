@@ -1,4 +1,4 @@
-// Hash router: "#/chat" (default), "#/corpus-map", "#/collaboration".
+// Hash router: "#/chat" (default), "#/corpus-map", "#/collaboration", "#/pipeline".
 // A view is { mount(container) -> unmount() }.
 
 export function createRouter(routes, { container, nav, defaultRoute = "chat" }) {
