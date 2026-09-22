@@ -15,6 +15,15 @@ function loadDeck() {
 
 const cache = new Map(); // clusters -> payload (server memoises too; this saves the round-trip)
 
+// The match-ring outline needs to read against the page background, which flips
+// with the theme (see app.css's --ink token) -- a white ring is invisible in light mode.
+function isLightMode() {
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === "light") return true;
+  if (explicit === "dark") return false;
+  return !window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 export function corpusMapView() {
   return {
     mount(container) {
@@ -71,11 +80,13 @@ export function corpusMapView() {
           id: "points", data,
           getPosition: (d) => [d.x, d.y], getFillColor: (d) => d.color,
           getRadius: 4, radiusUnits: "pixels", radiusMinPixels: 2.5, radiusMaxPixels: 9,
-          opacity: 0.85, pickable: true, autoHighlight: true, highlightColor: [255, 255, 255, 140],
+          opacity: 0.85, pickable: true, autoHighlight: true,
+          highlightColor: isLightMode() ? [23, 27, 33, 140] : [255, 255, 255, 140],
         })];
         if (hits.length) L.push(new ScatterplotLayer({
           id: "matched", data: hits, getPosition: (d) => [d.x, d.y],
-          filled: false, stroked: true, getLineColor: [255, 255, 255], lineWidthUnits: "pixels",
+          filled: false, stroked: true,
+          getLineColor: isLightMode() ? [23, 27, 33] : [255, 255, 255], lineWidthUnits: "pixels",
           getLineWidth: 2, lineWidthMinPixels: 2, lineWidthMaxPixels: 2,
           getRadius: 12, radiusUnits: "pixels", radiusMinPixels: 12, radiusMaxPixels: 12, pickable: false,
         }));
