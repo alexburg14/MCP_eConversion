@@ -16,6 +16,7 @@ import asyncio
 import html
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -51,13 +52,32 @@ MAX_PROMPT_CHARS = 20_000
 MAX_FEEDBACK_CHARS = 5_000
 FEEDBACK_CATEGORIES = ("Bug report", "General feedback")
 
-# Clickable starters shown while the conversation is empty.
-EXAMPLES = [
-    "Which papers cover perovskite stability?",
-    "Who works on electrocatalysis?",
-    "Which PIs bridge institutions?",
-    "NOMAD data for battery materials",
+# Clickable starters shown while the conversation is empty. Sourced from the
+# "Questions for MCP.md" test-question list (Obsidian, Meeting eConversion);
+# a random subset of N_EXAMPLES is served per /api/config call.
+EXAMPLE_QUESTIONS = [
+    "How many publications does the e-conversion database contain?",
+    "Which groups in e-conversion are working with electronic structure theory?",
+    "What is the research focus of the group by Prof Rinke?",
+    "Which paper has the most co-authors from within e-conversion?",
+    "How many papers were published in Nature journals?",
+    "Which groups are working on similar topics to Prof. Rinke, based on their publication abstracts?",
+    "What are the main open scientific challenges mentioned across e-conversion papers?",
+    "Which papers would be most relevant to someone new to the field wanting to understand the role of interfaces in energy conversion?",
+    "Are there papers that explicitly mention machine learning being applied to experimental data, and if so which experimental techniques appear most often in that context?",
+    "Which two groups have the most complementary research — i.e., one produces data/methods the other could use?",
+    "Are there topics that appear in multiple group descriptions on the website but have few or no corresponding papers?",
+    "Which experimental groups have published jointly with theory/simulation groups?",
+    "How has the share of ML-related publications changed over the years in e-conversion?",
+    "Which topics appear in early papers (pre-2020) but not recent ones, and vice versa?",
+    "Has the collaboration density within the consortium increased over time?",
+    "Which PI has the highest h-index?",
+    "Can you create a connecting graph of the PIs in e-conversion based on collaborative papers?",
+    'Who acts as the most central "bridge" between otherwise disconnected groups?',
+    "Are there clusters of groups that only collaborate internally and rarely with others?",
+    "Which PI has collaborated with the most different groups, vs. the most papers with a single group?",
 ]
+N_EXAMPLES = 4
 
 SOURCES = {
     "elab": {
@@ -158,7 +178,7 @@ class AppState:
     sessions: auth.SessionStore = field(default_factory=auth.SessionStore)
     executor: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(CHAT_WORKERS, thread_name_prefix="chat"))
-    examples: list[str] = field(default_factory=lambda: list(EXAMPLES))
+    example_pool: list[str] = field(default_factory=lambda: list(EXAMPLE_QUESTIONS))
     sources: dict = field(default_factory=lambda: {k: dict(v) for k, v in SOURCES.items()})
     stats_cache: dict = field(default_factory=lambda: {"at": 0.0, "value": None})
     stats_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -436,7 +456,7 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             "cluster": {"name": state.cfg.cluster.name, "display_name": state.cfg.cluster.display_name,
                         "website": state.cfg.cluster.website},
             "placeholder": f"Ask about {state.n_papers} papers across {state.n_pis} PIs/groups in the cluster…",
-            "examples": state.examples,
+            "examples": random.sample(state.example_pool, min(N_EXAMPLES, len(state.example_pool))),
             "providers": providers,
             "routes": [dict(route) for route in llm.ROUTE_OPTIONS],
             "parameters": llm.param_payload(state.cfg),
@@ -715,10 +735,11 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             model = (last.get("meta") or {}).get("model", "")
         else:
             answer, question, model = "", "", _selection(state, session)["model"]
+        transcript = [{"role": m["role"], "content": m["content"]} for m in msgs]
         telemetry.record_feedback(
             question=question, answer=answer, model=model,
             provider=_selection(state, session)["provider"], session=session.id,
-            category=req.category, text=text,
+            category=req.category, text=text, messages=transcript,
         )
         return {"ok": True}
 

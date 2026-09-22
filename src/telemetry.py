@@ -180,21 +180,25 @@ def read_turns(limit: int = 20000) -> list[dict]:
 
 
 def log_feedback(*, category: str, session: str, model: str,
-                 text_len: int, question_len: int, answer_len: int) -> None:
-    # The raw question/answer live in the feedback store; this line is metadata only.
+                 text_len: int, question_len: int, answer_len: int, message_count: int) -> None:
+    # The raw conversation lives in the feedback store; this line is metadata only.
     log.info("feedback", extra={"fields": {
         "category": category, "session": session, "model": model,
         "text_len": text_len, "question_len": question_len, "answer_len": answer_len,
-        **version_info()}})
+        "message_count": message_count, **version_info()}})
 
 
 def record_feedback(*, question: str, answer: str, model: str, provider: str,
-                    session: str, category: str, text: str) -> dict:
-    """Append one feedback record (bug report or general note on a question/answer
-    pair) to the feedback store as JSONL and log a metadata-only line.
+                    session: str, category: str, text: str,
+                    messages: list[dict] | None = None) -> dict:
+    """Append one feedback record (bug report or general note) to the feedback
+    store as JSONL and log a metadata-only line.
 
-    Provenance fields (session/model/build) make a report traceable to the turn
-    it came from. This is the only place raw question/answer text is persisted.
+    ``question``/``answer`` are the last turn (kept for quick scanning);
+    ``messages`` is the full conversation up to that point, so a report is
+    reproducible without needing the reporter to re-explain earlier turns.
+    Provenance fields (session/model/build) make a report traceable to the
+    turn it came from. This is the only place raw conversation text is persisted.
     """
     FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
     ver = version_info()
@@ -207,6 +211,7 @@ def record_feedback(*, question: str, answer: str, model: str, provider: str,
         "build_time": ver["build_time"],
         "question": question,
         "answer": answer,
+        "messages": messages or [],
         "category": category,
         "text": text,
     }
@@ -215,6 +220,7 @@ def record_feedback(*, question: str, answer: str, model: str, provider: str,
     log_feedback(
         category=category, session=session, model=model, text_len=len(text),
         question_len=len(question or ""), answer_len=len(answer or ""),
+        message_count=len(messages or []),
     )
     return entry
 
