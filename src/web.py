@@ -366,6 +366,7 @@ def _run_turn_worker(state: AppState, session: auth.Session, resolved: dict, pro
             client, resolved["model"], api_msgs, system_prompt=system_prompt, tools=tools,
             call_tool=lambda name, args: state.call_tool(name, args, session.remote),
             extra=resolved.get("extra"), cancel=cancel, base_url=resolved["base_url"],
+            max_rounds=resolved.get("max_tool_rounds"),
         ):
             put(ev)
             if ev["type"] in ("done", "error"):

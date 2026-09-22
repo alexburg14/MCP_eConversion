@@ -238,7 +238,7 @@ function openParams() {
       input.min = String(field.min);
       input.max = String(field.max);
       input.step = String(field.step || 1);
-      input.placeholder = "model default";
+      input.placeholder = "default";
       input.value = effective[field.key] || "";
       label.append(input);
     } else {

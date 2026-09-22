@@ -187,6 +187,10 @@ PARAM_SPEC: tuple[dict[str, Any], ...] = (
     {"key": "max_tokens", "label": "Max output tokens", "type": "number",
      "min": 256, "max": 32768, "step": 256,
      "help": "Cap the answer length. Empty = the model's own default."},
+    {"key": "max_tool_rounds", "label": "Tool call limit", "type": "number",
+     "min": 1, "max": 25, "step": 1,
+     "help": "Max tool-call rounds per turn before the agent gives up and answers with "
+             "what it has. Empty = server default (10)."},
     # chosen in the model picker, not in the parameters panel
     {"key": "provider_sort", "label": "Provider routing", "type": "enum", "hidden": True,
      "options": ["price", "throughput", "latency"],
@@ -364,11 +368,16 @@ def resolve_llm(cfg: Config, provider_name: str | None = None,
     if not provider_name or provider_name not in providers:
         provider_name = default_provider
     prov = providers.get(provider_name)
+    # Agent-loop control, not an LLM request field -- resolved here (not in
+    # build_extra) so it never leaks into the OpenAI/OpenRouter request body.
+    raw_max_rounds = effective_params(cfg, params)["max_tool_rounds"]
+    max_tool_rounds = int(raw_max_rounds) if raw_max_rounds else None
     if prov is None:
         return {"provider": "default", "base_url": cfg.llm.base_url,
                 "model": cfg.llm.default_model,
                 "api_key": provider_api_key("API_KEY"),
-                "extra": build_extra(cfg, params, None)}
+                "extra": build_extra(cfg, params, None),
+                "max_tool_rounds": max_tool_rounds}
     models = list(prov.models) or [prov.default_model]
     api_key = provider_api_key(prov.api_key_env)
     if "openrouter" in prov.base_url:
@@ -380,7 +389,8 @@ def resolve_llm(cfg: Config, provider_name: str | None = None,
     else:
         model = model_name if model_name in models else prov.default_model
     return {"provider": provider_name, "base_url": prov.base_url, "model": model,
-            "api_key": api_key, "extra": build_extra(cfg, params, provider_name)}
+            "api_key": api_key, "extra": build_extra(cfg, params, provider_name),
+            "max_tool_rounds": max_tool_rounds}
 
 
 # Per-read timeout: a stream that produces no chunk for this long is a hung

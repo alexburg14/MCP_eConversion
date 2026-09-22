@@ -182,15 +182,18 @@ class _Progress:
 def run_turn(client: Any, model: str, messages: list[dict], *, system_prompt: str,
              tools: list[dict], call_tool: Callable[[str, dict], str],
              extra: dict | None = None, cancel: threading.Event | None = None,
-             base_url: str = "") -> Iterator[dict]:
+             base_url: str = "", max_rounds: int | None = None) -> Iterator[dict]:
     """Stream one assistant turn, running tool calls between model rounds.
+
+    ``max_rounds`` overrides ``MAX_TOOL_ROUNDS`` for this turn (a session's
+    "Tool call limit" parameter); None uses the module default.
 
     Never raises: an exception becomes the terminal ``error`` event.
     """
     p = _Progress()
     try:
         yield from _run_rounds(client, model, messages, system_prompt, tools, call_tool,
-                               extra, cancel, base_url, p)
+                               extra, cancel, base_url, p, max_rounds or MAX_TOOL_ROUNDS)
     except Exception as exc:  # noqa: BLE001 -- reported to the caller as an event
         log.error("turn failed", exc_info=True, extra={"fields": {"model": model, "round": p.rounds}})
         message = friendly_error(exc)
@@ -220,7 +223,8 @@ def friendly_error(exc: Exception) -> str:
 
 def _run_rounds(client: Any, model: str, messages: list[dict], system_prompt: str,
                 tools: list[dict], call_tool: Callable[[str, dict], str], extra: dict | None,
-                cancel: threading.Event | None, base_url: str, p: _Progress) -> Iterator[dict]:
+                cancel: threading.Event | None, base_url: str, p: _Progress,
+                max_rounds: int) -> Iterator[dict]:
     msgs = [{"role": "system", "content": system_prompt}] + list(messages)
     kwargs: dict[str, Any] = {"tools": tools} if tools else {}
     extra_body: dict | None = None
@@ -243,12 +247,12 @@ def _run_rounds(client: Any, model: str, messages: list[dict], system_prompt: st
     def cancelled() -> bool:
         return cancel is not None and cancel.is_set()
 
-    for round_num in range(MAX_TOOL_ROUNDS):
+    for round_num in range(max_rounds):
         rounds = p.rounds = round_num + 1
         if cancelled():
             yield _done(answer_so_far(), start, rounds - 1, usage, tool_log, tool_meta, "cancelled")
             return
-        yield {"type": "round", "round": rounds, "max": MAX_TOOL_ROUNDS}
+        yield {"type": "round", "round": rounds, "max": max_rounds}
         call_start = time.perf_counter()
         stream = _create_stream(client, model, msgs, kwargs, extra_body, base_url)
         text_parts: list[str] = []
