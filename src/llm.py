@@ -188,7 +188,7 @@ PARAM_SPEC: tuple[dict[str, Any], ...] = (
      "min": 256, "max": 32768, "step": 256,
      "help": "Cap the answer length. Empty = the model's own default."},
     {"key": "max_tool_rounds", "label": "Tool call limit", "type": "number",
-     "min": 1, "max": 25, "step": 1,
+     "min": 1, "max": 100, "step": 1,
      "help": "Max tool-call rounds per turn before the agent gives up and answers with "
              "what it has. Empty = server default (10)."},
     # chosen in the model picker, not in the parameters panel
