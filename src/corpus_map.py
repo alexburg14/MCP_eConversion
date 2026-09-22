@@ -26,6 +26,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _CACHE_PATH = _DATA_DIR / "cache" / "embeddings_cache.npz"
+_PROJ_PATH = _DATA_DIR / "cache" / "corpus_projection.npz"
 
 _TERMS_PER_LABEL = 3
 
@@ -43,6 +44,16 @@ def _load() -> tuple[tuple[str, ...], np.ndarray]:
 
 @lru_cache(maxsize=1)
 def _project() -> np.ndarray:
+    # UMAP costs ~30 s cold (numba JIT included) and Streamlit drops its caches on
+    # every deploy, so without a disk cache the first visitor after each deploy
+    # would pay it again. Keep the projection next to the embeddings.
+    if _PROJ_PATH.exists():
+        try:
+            with np.load(_PROJ_PATH, allow_pickle=True) as cached:
+                return cached["coords"]
+        except Exception:  # noqa: BLE001 -- fall through to a fresh computation
+            pass
+
     import umap  # deferred: heavy import (numba), only needed for the map tab
 
     _, vectors = _load()
@@ -50,7 +61,12 @@ def _project() -> np.ndarray:
         n_components=2, n_neighbors=15, min_dist=0.1,
         metric="cosine", random_state=42,
     )
-    return reducer.fit_transform(vectors)
+    coords = reducer.fit_transform(vectors)
+    try:
+        np.savez(_PROJ_PATH, coords=coords)
+    except OSError:  # read-only volume: compute it again next time
+        pass
+    return coords
 
 
 @lru_cache(maxsize=8)

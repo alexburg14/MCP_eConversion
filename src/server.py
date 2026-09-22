@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,7 +45,26 @@ papers_by_doi = {p["doi"].lower(): p for p in papers}
 
 # Optional enrichment caches: a missing or corrupt one degrades a single feature
 # (full text, PI profiles) rather than crashing the server.
-_FULLTEXTS: dict = safe_load_json(FULLTEXT_CACHE_PATH, "fulltext") or {}
+# The full-text cache is ~61 MB of JSON (~59 MB of text): parsing it at import
+# cost ~1-2 s and ~200 MB RSS before the first page could render. It is loaded in
+# a background thread instead; the tool that needs it waits on the event.
+_FULLTEXTS: dict = {}
+_FULLTEXTS_READY = threading.Event()
+
+
+def _load_fulltexts() -> None:
+    """Parse fulltext_cache.json off the critical path (see above)."""
+    global _FULLTEXTS
+    try:
+        data = safe_load_json(FULLTEXT_CACHE_PATH, "fulltext") or {}
+        _FULLTEXTS = data
+        CACHE_STATUS["fulltext"] = {"available": bool(data), "count": len(data)}
+        log.info("fulltext cache loaded", extra={"fields": {"entries": len(data)}})
+    except Exception as exc:  # noqa: BLE001 -- a broken cache must not kill the app
+        log.warning("fulltext cache load failed", extra={"fields": {"error": str(exc)[:200]}})
+    finally:
+        _FULLTEXTS_READY.set()
+
 _PIS: list = safe_load_json(PIS_CACHE_PATH, "pis") or []
 
 if PROPOSAL_FULLTEXT_PATH.exists():
@@ -59,7 +79,7 @@ else:
 CACHE_STATUS: dict = {
     "papers": {"available": bool(papers), "count": len(papers)},
     "abstracts": {"available": bool(_ABSTRACTS), "count": len(_ABSTRACTS)},
-    "fulltext": {"available": bool(_FULLTEXTS), "count": len(_FULLTEXTS)},
+    "fulltext": {"available": FULLTEXT_CACHE_PATH.exists(), "count": None},
     "pis": {"available": bool(_PIS), "count": len(_PIS)},
     "embeddings": {"available": semantic_search.is_available()},
     "graph": {"available": _graph.is_available()},
@@ -67,6 +87,9 @@ CACHE_STATUS: dict = {
 }
 
 log.info("caches loaded", extra={"fields": {k: v.get("count", v["available"]) for k, v in CACHE_STATUS.items()}})
+
+# Warm the full-text cache in the background (it is only needed for one tool).
+threading.Thread(target=_load_fulltexts, name="fulltext-loader", daemon=True).start()
 
 
 def _preload_semantic_model() -> None:
@@ -191,6 +214,7 @@ def get_paper_fulltext(
     Cached for ~99% of the corpus (953 of 956) — open-access harvest plus
     locally-supplied PDFs — so it is worth trying for most DOIs."""
     doi = doi.strip().lower()
+    _FULLTEXTS_READY.wait(timeout=60)  # loaded in the background at startup
     entry = _FULLTEXTS.get(doi)
     if entry is None:
         return json.dumps({"error": f"No full text cached for DOI: {doi}", "doi": doi})
