@@ -143,6 +143,7 @@ def test_log_feedback_is_metadata_only(isolated):
     telemetry.log_feedback(
         category="Bug report", session="abcd1234", model="qwen3.8-27b",
         text_len=42, question_len=len(SECRET_PROMPT), answer_len=len(SECRET_ANSWER),
+        message_count=2,
     )
     text = _log_text(isolated[0])
     assert "feedback" in text

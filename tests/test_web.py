@@ -197,6 +197,10 @@ def test_feedback_records_the_last_turn(client, harness, tmp_path):
     line = json.loads((tmp_path / "feedback.jsonl").read_text().strip())
     assert line["question"] == "The question" and line["answer"] == "The answer"
     assert line["model"] == "qwen3.8-27b" and line["text"] == "broken" and line["provider"] == "gwdg"
+    assert line["messages"] == [
+        {"role": "user", "content": "The question"},
+        {"role": "assistant", "content": "The answer"},
+    ]
     assert client.post("/api/feedback", json={"category": "Praise", "text": "x"}).status_code == 400
     assert client.post("/api/feedback", json={"category": "Bug report", "text": "   "}).status_code == 400
 

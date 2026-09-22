@@ -735,10 +735,11 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             model = (last.get("meta") or {}).get("model", "")
         else:
             answer, question, model = "", "", _selection(state, session)["model"]
+        transcript = [{"role": m["role"], "content": m["content"]} for m in msgs]
         telemetry.record_feedback(
             question=question, answer=answer, model=model,
             provider=_selection(state, session)["provider"], session=session.id,
-            category=req.category, text=text,
+            category=req.category, text=text, messages=transcript,
         )
         return {"ok": True}
 
