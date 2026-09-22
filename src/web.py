@@ -419,6 +419,20 @@ def _sse_frame(event: dict) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+class RevalidatingStatic(StaticFiles):
+    """Static assets with ``Cache-Control: no-cache``.
+
+    The frontend carries no version in its URLs, so a heuristically cached
+    app.js survives a deploy and the new code silently does not run. ``no-cache``
+    means "revalidate", not "do not cache": with the ETag that costs one 304.
+    """
+
+    def file_response(self, *args, **kwargs) -> Any:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def _register_fallback_html(label: str, url: str, reason: str) -> str:
     """Shown inside the inset when the upstream page cannot be mirrored."""
     return (
@@ -786,7 +800,7 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
                                  "hint": "Run: python build.py graph"}, status_code=404)
         return payload
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", RevalidatingStatic(directory=str(STATIC_DIR)), name="static")
 
     if root_path:
         outer = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)

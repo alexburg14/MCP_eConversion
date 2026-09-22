@@ -432,6 +432,13 @@ def test_register_proxy_falls_back_to_a_new_tab_link(client, monkeypatch, fake):
     assert web.SOURCES["elab"]["register_url"] in r.text and "new tab" in r.text
 
 
+def test_static_assets_must_revalidate(client):
+    """The frontend has no versioned URLs: a cached app.js would outlive a deploy."""
+    r = client.get("/static/js/app.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    assert r.headers.get("etag")
+
+
 def test_register_proxy_rejects_an_unknown_source(client):
     assert client.get("/api/register/nope").status_code == 404
 

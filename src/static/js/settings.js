@@ -340,7 +340,15 @@ export function initDialogs(s) {
     if (b) applyTheme(b.dataset.theme);
   });
   const menu = document.getElementById("menu");
-  document.addEventListener("click", (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
+  // Pop-up <details> (header menu, model picker) dismiss like the dialogs do.
+  // Expanders that are part of a panel (#pipeline-box) are deliberately not listed.
+  const popovers = () => document.querySelectorAll("details.menu[open], details.picker[open]");
+  document.addEventListener("click", (e) => {
+    for (const d of popovers()) if (!d.contains(e.target)) d.open = false;
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") for (const d of popovers()) d.open = false;
+  });
   document.getElementById("stats-btn").addEventListener("click", () => { menu.open = false; openStats(); });
   const box = document.getElementById("pipeline-box");
   box.addEventListener("toggle", () => {
