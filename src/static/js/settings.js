@@ -21,17 +21,54 @@ function openConnect(kind) {
   const src = store.config.sources[kind];
   const conn = store.session.connected[kind];
   document.getElementById("connect-title").textContent = `Connect ${src.label}`;
-  document.getElementById("connect-label").textContent = `${src.label} token`;
-  // Mirrored through the app: the upstream page refuses to be framed cross-origin.
-  document.getElementById("connect-frame").src = `api/register/${kind}`;
-  document.getElementById("connect-link").href = src.register_url;
+  document.getElementById("connect-base-label").textContent = `${src.label} base URL`;
+  document.getElementById("connect-base").value = src.base_url_default || "";
+  document.getElementById("connect-key-label").textContent = src.key_label || "API key";
+  document.getElementById("connect-key").value = "";
   document.getElementById("connect-token").value = "";
+  document.getElementById("connect-label").textContent = `${src.label} token`;
   document.getElementById("connect-error").hidden = true;
+
+  const profiles = Array.isArray(src.profiles) ? src.profiles : [];
+  document.getElementById("connect-profile-field").hidden = profiles.length === 0;
+  const select = document.getElementById("connect-profile");
+  select.replaceChildren();
+  for (const p of profiles) {
+    const option = document.createElement("option");
+    option.value = p.value;
+    option.textContent = p.label;
+    select.append(option);
+  }
+
   document.getElementById("connect-disconnect").hidden = !conn.active;
+  const testBtn = document.getElementById("connect-test");
+  testBtn.hidden = !src.test_user;
+  if (src.test_user) testBtn.textContent = `Sign in as ${src.test_user.label}`;
   document.getElementById("connect-hint").textContent = conn.active
-    ? `Connected — ${conn.tools} tools available. Paste a new token to replace it.`
-    : "Register below — you stay inside the app. Then paste the token.";
+    ? `Connected — ${conn.tools} tools available. Signing in again replaces the key.`
+    : "Sign in with your account — the token is created for you and stays on the server.";
   document.getElementById("dlg-connect").showModal();
+}
+
+async function submitRegister() {
+  const err = document.getElementById("connect-error");
+  const btn = document.getElementById("connect-register");
+  const label = btn.textContent;
+  const apiKey = document.getElementById("connect-key").value.trim();
+  if (!apiKey) { err.textContent = "Enter your API key first."; err.hidden = false; return; }
+  btn.disabled = true; btn.textContent = "Connecting…";
+  try {
+    const r = await postJSON(`api/session/register/${connectKind}`, {
+      base_url: document.getElementById("connect-base").value.trim(),
+      api_key: apiKey,
+      profile: document.getElementById("connect-profile").value,
+    });
+    await refreshSession();
+    document.getElementById("connect-key").value = "";
+    toast(`${store.config.sources[connectKind].label}: connected (${r.tools} tools)`);
+    document.getElementById("dlg-connect").close();
+  } catch (e) { err.textContent = e.message; err.hidden = false; }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
 
 async function submitConnect() {
@@ -52,6 +89,25 @@ async function submitConnect() {
     }
   } catch (e) { err.textContent = e.message; err.hidden = false; }
   finally { btn.disabled = false; btn.textContent = "Connect"; }
+}
+
+async function useTestAccount() {
+  const err = document.getElementById("connect-error");
+  const btn = document.getElementById("connect-test");
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Signing in…";
+  try {
+    const r = await postJSON(`api/session/connect/${connectKind}/test`, {});
+    await refreshSession();
+    if (r.active) {
+      toast(`${store.config.sources[connectKind].label}: connected (${r.tools} tools)`);
+      document.getElementById("dlg-connect").close();
+    } else {
+      err.textContent = r.error || "Test account unavailable — paste a token instead.";
+      err.hidden = false;
+    }
+  } catch (e) { err.textContent = e.message; err.hidden = false; }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
 
 async function disconnect() {
@@ -123,6 +179,124 @@ function renderStats(s) {
     `;
 }
 
+// ---------- parameters dialog ----------
+/** Fields the session changed away from the config.toml defaults. */
+function changedParams(store) {
+  const defaults = store.config.parameters.defaults;
+  const effective = store.session.params || {};
+  return Object.keys(defaults).filter((k) => effective[k] !== defaults[k]);
+}
+
+function optionLabel(spec, value) {
+  if (value === "") return (spec.option_labels || {})[""] || "default";
+  return (spec.option_labels || {})[value] || value;
+}
+
+function openParams() {
+  const store0 = store;
+  const spec = store0.config.parameters.spec;
+  const effective = store0.session.params || {};
+  const defaults = store0.config.parameters.defaults;
+  const body = document.getElementById("params-body");
+  document.getElementById("params-error").hidden = true;
+  body.replaceChildren();
+
+  for (const field of spec.filter((f) => !f.hidden)) {
+    const label = document.createElement("label");
+    label.className = "field";
+    const name = document.createElement("span");
+    name.textContent = field.label;
+    if (effective[field.key] !== defaults[field.key]) {
+      const changed = document.createElement("b");
+      changed.className = "muted small";
+      changed.textContent = " · changed";
+      name.append(changed);
+    }
+    label.append(name);
+
+    if (field.type === "bool") {
+      const seg = document.createElement("div");
+      seg.className = "seg";
+      seg.dataset.key = field.key;
+      for (const val of [true, false]) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.dataset.val = String(val);
+        b.textContent = val ? "on" : "off";
+        b.className = effective[field.key] === val ? "on" : "";
+        b.addEventListener("click", () => {
+          for (const other of seg.querySelectorAll("button")) other.classList.toggle("on", other === b);
+        });
+        seg.append(b);
+      }
+      label.append(seg);
+    } else if (field.type === "number") {
+      const input = document.createElement("input");
+      input.type = "number";
+      input.dataset.key = field.key;
+      input.min = String(field.min);
+      input.max = String(field.max);
+      input.step = String(field.step || 1);
+      input.placeholder = "model default";
+      input.value = effective[field.key] || "";
+      label.append(input);
+    } else {
+      const select = document.createElement("select");
+      select.dataset.key = field.key;
+      for (const opt of field.options) {
+        const o = document.createElement("option");
+        o.value = opt;
+        o.textContent = optionLabel(field, opt);
+        if (opt === effective[field.key]) o.selected = true;
+        select.append(o);
+      }
+      label.append(select);
+    }
+    wrap.append(label);
+    if (field.help) {
+      const help = document.createElement("p");
+      help.className = "hint";
+      help.textContent = field.help;
+      wrap.append(help);
+    }
+    body.append(wrap);
+  }
+  document.getElementById("dlg-params").showModal();
+}
+
+function readParams() {
+  const out = {};
+  for (const el of document.querySelectorAll("#params-body [data-key]")) {
+    if (el.classList.contains("seg")) {
+      const on = el.querySelector("button.on");
+      if (on) out[el.dataset.key] = on.dataset.val === "true";
+    } else {
+      out[el.dataset.key] = el.value.trim();
+    }
+  }
+  return out;
+}
+
+async function applyParams() {
+  const err = document.getElementById("params-error");
+  try {
+    await postJSON("api/session/params", { params: readParams() });
+    await refreshSession();
+    document.getElementById("dlg-params").close();
+    toast("Parameters applied");
+  } catch (e) { err.textContent = e.message; err.hidden = false; }
+}
+
+async function resetParams() {
+  const err = document.getElementById("params-error");
+  try {
+    await del("api/session/params");
+    await refreshSession();
+    openParams();  // re-render with the defaults
+    toast("Parameters reset to defaults");
+  } catch (e) { err.textContent = e.message; err.hidden = false; }
+}
+
 // ---------- theme ----------
 const THEME_KEY = "econverse-theme";
 
@@ -163,11 +337,19 @@ export function initDialogs(s) {
     const f = document.getElementById("pipeline-frame");
     if (box.open && !f.src) { f.src = f.dataset.src; f.addEventListener("load", () => propagateTheme(f), { once: true }); }
   });
+  document.getElementById("params-apply").addEventListener("click", applyParams);
+  document.getElementById("params-reset").addEventListener("click", resetParams);
+  document.getElementById("connect-register").addEventListener("click", submitRegister);
+  document.getElementById("connect-test").addEventListener("click", useTestAccount);
   document.getElementById("connect-submit").addEventListener("click", submitConnect);
   document.getElementById("connect-disconnect").addEventListener("click", disconnect);
   document.getElementById("connect-token").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitConnect(); } });
   document.getElementById("feedback-submit").addEventListener("click", submitFeedback);
-  document.getElementById("dlg-connect").addEventListener("close", () => { document.getElementById("connect-frame").src = "about:blank"; });
+  document.getElementById("dlg-connect").addEventListener("close", () => {
+    // never leave a key or a token in the DOM after the dialog closes
+    document.getElementById("connect-key").value = "";
+    document.getElementById("connect-token").value = "";
+  });
 }
 
 // ---------- settings row ----------
@@ -187,20 +369,47 @@ export function renderSettingsRow(store, el) {
     el.append(b);
   }
 
+  const shortModel = (id) => (id || "").replace(/^.*\//, "");
   const picker = document.createElement("details");
   picker.className = "picker";
-  const label = session.auto_model ? `${session.provider} / auto (cheapest)` : `${session.provider} / ${session.model}`;
-  picker.innerHTML = `<summary class="chip" title="Switch provider or model">${escapeHtml(label)} ▾</summary><div class="picker-menu"></div>`;
+  const label = session.auto_model
+    ? `${session.provider} / ${session.route_label || "cheapest"}${session.resolved_model ? " \u00b7 " + shortModel(session.resolved_model) : ""}`
+    : `${session.provider} / ${session.model}`;
+  picker.innerHTML = `<summary class="chip" title="Switch model or routing">${escapeHtml(label)} \u25be</summary><div class="picker-menu"></div>`;
   const menu = picker.querySelector(".picker-menu");
   for (const [name, prov] of Object.entries(cfg.providers)) {
-    const h = document.createElement("h4"); h.textContent = name; menu.append(h);
-    const models = prov.openrouter ? ["", ...prov.models] : (prov.models.length ? prov.models : [prov.default_model]);
+    const h = document.createElement("h4");
+    h.textContent = prov.note ? `${name} \u00b7 ${prov.note}` : name;
+    menu.append(h);
+
+    if (prov.openrouter) {
+      // the routing choices are the model choices: all use the cheapest eligible
+      // model, they differ in how the upstream provider is picked
+      for (const route of cfg.routes || []) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = (name === session.provider && session.auto_model && session.sort === route.value) ? "on" : "";
+        b.innerHTML = `<b>${escapeHtml(route.label)}</b><span class="muted small">${escapeHtml(route.help)}</span>`
+          + `<span class="hint">model: ${escapeHtml(session.resolved_model || "cheapest eligible")}`
+          + ` \u00b7 \u2264 1 \u20ac/M tokens</span>`;
+        b.addEventListener("click", async () => {
+          try {
+            await postJSON("api/session/model", { provider: name, model: "", sort: route.value });
+            await refreshSession();
+          } catch (e) { toast(e.message, "bad"); }
+          picker.open = false;
+        });
+        menu.append(b);
+      }
+      continue;
+    }
+
+    const models = prov.models.length ? prov.models : [prov.default_model];
     for (const m of models) {
       const b = document.createElement("button");
       b.type = "button";
-      const picked = name === session.provider && (m ? m === session.model : session.auto_model);
-      b.className = picked ? "on" : "";
-      b.textContent = m || "auto (cheapest eligible)";
+      b.className = (name === session.provider && !session.auto_model && m === session.model) ? "on" : "";
+      b.textContent = m;
       b.addEventListener("click", async () => {
         try { await postJSON("api/session/model", { provider: name, model: m }); await refreshSession(); }
         catch (e) { toast(e.message, "bad"); }
@@ -209,11 +418,6 @@ export function renderSettingsRow(store, el) {
       menu.append(b);
     }
   }
-  if (Object.values(cfg.providers).some((p) => p.openrouter)) {
-    const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = "OpenRouter: without a pick, the cheapest model allowed by the account guardrails is used automatically.";
-    menu.append(hint);
-  }
   const tools = session.tools;
   const inv = document.createElement("div"); inv.className = "hint";
   inv.textContent = "Tools: " + [`${tools.local} local`]
@@ -221,6 +425,20 @@ export function renderSettingsRow(store, el) {
   menu.append(inv);
   el.append(picker);
   document.addEventListener("click", (ev) => { if (picker.open && !picker.contains(ev.target)) picker.open = false; });
+
+  const params = document.createElement("button");
+  params.type = "button";
+  params.id = "params-chip";
+  params.className = "chip";
+  const changed = changedParams(store);
+  params.title = "LLM parameters for this session: reasoning effort, temperature, provider routing, data retention";
+  params.textContent = changed.length
+    ? `\u2699 ${changed.length} changed: ` + changed.slice(0, 2)
+        .map((k) => `${k.replace(/_/g, " ")} ${store.session.params[k] === "" ? "off" : store.session.params[k]}`).join(", ")
+        + (changed.length > 2 ? " \u2026" : "")
+    : "\u2699 parameters: defaults";
+  params.addEventListener("click", openParams);
+  el.append(params);
 
   const spacer = document.createElement("span"); spacer.className = "spacer"; el.append(spacer);
   const fb = document.createElement("button");

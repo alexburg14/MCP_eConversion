@@ -29,7 +29,9 @@ participating_institutions = [
 
 [llm]
 # OpenAI-compatible chat endpoints. Multiple providers can be defined and are
-# selectable in the sidebar. The first entry is the default.
+# selectable in the model picker. default_provider is what a new session starts
+# on; if that provider has no API key, the first one that has a key is used.
+default_provider = "openrouter"
 #
 # The model list mirrors the open-weight models GWDG actually serves on
 # chat-ai.academiccloud.de (docs list minus the ids the API no longer answers):
@@ -37,51 +39,35 @@ participating_institutions = [
 # Re-check with:  GET https://chat-ai.academiccloud.de/v1/models
 base_url = "https://chat-ai.academiccloud.de/v1"
 default_model = "qwen3.8-27b"
-models = [
-    "qwen3.8-27b",
-    "qwen3.6-35b-a3b",
-    "qwen3.5-397b-a17b",
-    "qwen3-30b-a3b-instruct-2507",
-    "qwen3-coder-next",
-    "qwen3-omni-30b-a3b-instruct",
-    "glm-5.3-flash",
-    "deepseek-v4-flash-0731",
-    "mistral-medium-3.5-128b",
-    "devstral-2-123b-instruct-2512",
-    "gemma-4-31b-it",
-    "apertus-70b-instruct-2509",
-    "meta-llama-3.1-8b-instruct",
-    "openai-gpt-oss-120b",
-]
+models = ["qwen3.8-27b"]
 
 [llm.providers.gwdg]
+# Shown in the picker as the fallback when OpenRouter is unavailable.
+note = "fallback"
 base_url = "https://chat-ai.academiccloud.de/v1"
 default_model = "qwen3.8-27b"
-models = [
-    "qwen3.8-27b",
-    "qwen3.6-35b-a3b",
-    "qwen3.5-397b-a17b",
-    "qwen3-30b-a3b-instruct-2507",
-    "qwen3-coder-next",
-    "qwen3-omni-30b-a3b-instruct",
-    "glm-5.3-flash",
-    "deepseek-v4-flash-0731",
-    "mistral-medium-3.5-128b",
-    "devstral-2-123b-instruct-2512",
-    "gemma-4-31b-it",
-    "apertus-70b-instruct-2509",
-    "meta-llama-3.1-8b-instruct",
-    "openai-gpt-oss-120b",
-]
+models = ["qwen3.8-27b"]
 
 [llm.providers.openrouter]
 # API key env var for this provider (not the shared API_KEY used by GWDG)
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default_model = "openai/gpt-4o"
-models = [
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-3.5-sonnet",
-    "google/gemini-2.0-flash",
-]
+# Only the automatic choice is offered: the cheapest model that satisfies the
+# account guardrails, a 1 EUR/M price cap, agentic index >= 35 and tool support.
+# default_model is the fallback when the catalogue cannot be reached.
+# Only used when the catalogue is unreachable: keep it cheap (a pricey id here
+# would be picked silently whenever the fetch fails).
+default_model = "deepseek/deepseek-v4-flash-0731"
+models = []
+
+# Per-session LLM parameters (the UI's "Parameters" panel). Empty string = do not
+# send the field, i.e. use the provider's own default. Can be overridden per
+# session; "Reset defaults" in the UI restores exactly these values.
+# Deliberately NOT configurable: zero-data-retention routing is always on, and
+# temperature / parallel tool calls stay at the provider's defaults.
+[llm.params]
+reasoning_effort = ""        # "" | minimal | low | medium | high  (reasoning models only)
+top_p = ""                    # "" | 0.8 | 0.9 | 0.95 | 1.0
+max_tokens = ""               # "" = model default, otherwise 256..32768
+# Set by the model picker (cheapest / fastest / lowest latency), not in the panel.
+provider_sort = "price"

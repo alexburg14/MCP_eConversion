@@ -16,9 +16,27 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
-from config import Config
+from config import Config, Provider
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The OpenRouter choices offered in the model picker. All of them use the same
+# (cheapest eligible) model and differ only in how the upstream provider is
+# picked; a hard price cap keeps every route cheap.
+ROUTE_OPTIONS: tuple[dict[str, str], ...] = (
+    {"value": "price", "label": "cheapest",
+     "help": "Cheapest eligible model at the lowest price — the default."},
+    {"value": "throughput", "label": "fastest",
+     "help": "Same model, routed to the provider with the most tokens/second."},
+    {"value": "latency", "label": "lowest latency",
+     "help": "Same model, routed to the provider with the lowest latency."},
+)
+ROUTE_VALUES = tuple(route["value"] for route in ROUTE_OPTIONS)
+
+
+def route_label(value: str) -> str:
+    return next((r["label"] for r in ROUTE_OPTIONS if r["value"] == value), value)
+
 
 # OpenRouter: dynamically fetch models that satisfy the account's guardrails
 # and cost under 1 EUR / M tokens (prompt AND completion). Falls back to the
@@ -119,6 +137,10 @@ def _fetch_openrouter_models_uncached(api_key: str) -> tuple[list[str], list[str
     return cheapest, all_ids
 
 
+def _cache_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+
+
 def fetch_openrouter_models(api_key: str) -> tuple[list[str], list[str]]:
     """Cached wrapper around the two OpenRouter catalogue calls (per key, TTL)."""
     key = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
@@ -148,22 +170,194 @@ def provider_api_key(env_name: str) -> str:
     return ""
 
 
-def default_provider_name(cfg: Config) -> str:
-    """The provider whose base_url matches the top-level [llm] block, else the first."""
+# ---------------------------------------------------------------------------
+# Per-session LLM parameters
+# ---------------------------------------------------------------------------
+# One source of truth: the keys the UI renders, the values config.toml may set,
+# the values a session may override, and how they map onto the request.
+PARAM_SPEC: tuple[dict[str, Any], ...] = (
+    {"key": "reasoning_effort", "label": "Reasoning effort", "type": "enum",
+     "options": ["", "minimal", "low", "medium", "high"],
+     "option_labels": {"": "off (provider default)"},
+     "help": "Thinking budget for models with reasoning (deepseek). Ignored elsewhere."},
+    {"key": "top_p", "label": "Top P", "type": "enum",
+     "options": ["", "0.8", "0.9", "0.95", "1.0"],
+     "option_labels": {"": "default (1.0)"},
+     "help": "Restrict sampling to the most likely tokens."},
+    {"key": "max_tokens", "label": "Max output tokens", "type": "number",
+     "min": 256, "max": 32768, "step": 256,
+     "help": "Cap the answer length. Empty = the model's own default."},
+    # chosen in the model picker, not in the parameters panel
+    {"key": "provider_sort", "label": "Provider routing", "type": "enum", "hidden": True,
+     "options": ["price", "throughput", "latency"],
+     "option_labels": {"price": "cheapest", "throughput": "fastest tokens/s",
+                       "latency": "lowest latency"},
+     "help": "OpenRouter picks the upstream provider by price, throughput or latency."},
+)
+PARAM_KEYS = tuple(spec["key"] for spec in PARAM_SPEC)
+_BOOL_KEYS = tuple(spec["key"] for spec in PARAM_SPEC if spec["type"] == "bool")
+# Sent in OpenRouter's extra_body instead of a top-level request field.
+EXTRA_BODY_KEYS = ("provider", "reasoning", "reasoning_effort", "verbosity",
+                    "web_search_options", "models", "transforms", "route")
+
+
+def normalize_param(key: str, value: Any) -> Any:
+    """Canonical stored form for one parameter (raises on an invalid value).
+
+    Enums and numbers are stored as strings ("" = unset), booleans as bools, so
+    the value from config.toml, the session override and the UI all compare equal.
+    """
+    spec = next((s for s in PARAM_SPEC if s["key"] == key), None)
+    if spec is None:
+        raise ValueError(f"unknown parameter: {key}")
+    if spec["type"] == "bool":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.lower() in ("true", "false"):
+            return value.lower() == "true"
+        raise ValueError(f"{key} must be true or false")
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if spec["type"] == "enum":
+        if text not in spec["options"]:
+            raise ValueError(f"{key} must be one of {', '.join(o or 'default' for o in spec['options'])}")
+        return text
+    if text == "":
+        return ""
+    try:
+        number = float(text)
+    except ValueError:
+        raise ValueError(f"{key} must be a number") from None
+    if not spec["min"] <= number <= spec["max"]:
+        raise ValueError(f"{key} must be between {spec['min']} and {spec['max']}")
+    return str(int(number))
+
+
+def default_params(cfg: Config) -> dict[str, Any]:
+    """config.toml values for every known parameter, in canonical form."""
+    out: dict[str, Any] = {}
+    raw = dict(cfg.llm.params or {})
+    for spec in PARAM_SPEC:
+        key = spec["key"]
+        fallback = "" if spec["type"] != "bool" else bool(spec.get("default", False))
+        if key not in raw:
+            out[key] = fallback
+            continue
+        try:
+            out[key] = normalize_param(key, raw[key])
+        except ValueError:  # a typo in config.toml must not break the app
+            out[key] = fallback
+    return out
+
+
+def effective_params(cfg: Config, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Defaults + the session's overrides (invalid overrides are ignored)."""
+    out = default_params(cfg)
+    for key, value in (overrides or {}).items():
+        if key not in PARAM_KEYS:
+            continue
+        try:
+            out[key] = normalize_param(key, value)
+        except ValueError:
+            continue
+    return out
+
+
+def build_extra(cfg: Config, params: dict[str, Any] | None, provider_name: str | None) -> dict[str, Any] | None:
+    """Request fields for one turn, or None when nothing is set.
+
+    Sampling parameters go to every provider (they are plain OpenAI fields);
+    OpenRouter-only controls (provider routing, reasoning) are sent only on the
+    OpenRouter base_url, so a GWDG turn never sees a field its gateway could
+    reject. Zero-data-retention routing and parallel tool calls are deliberately
+    not part of the panel: ZDR is always requested, the rest stays at the
+    provider's default.
+    """
+    effective = effective_params(cfg, params)
     providers = cfg.providers or {}
-    names = list(providers)
-    return next(
+    prov = providers.get(provider_name or "")
+    openrouter = bool(prov and "openrouter" in prov.base_url)
+    extra: dict[str, Any] = {}
+    if effective["top_p"] != "":
+        extra["top_p"] = float(effective["top_p"])
+    if effective["max_tokens"] != "":
+        extra["max_tokens"] = int(effective["max_tokens"])
+    if not openrouter:
+        return extra or None
+    # Prompts must not be retained upstream (privacy rule) -> always request ZDR.
+    # max_price caps the routing: "fastest"/"lowest latency" may pick a pricier
+    # provider, but never one above the same ceiling the model filter uses.
+    extra["provider"] = {"sort": effective["provider_sort"], "zdr": True,
+                         "data_collection": "deny",
+                         "max_price": {"prompt": OPENROUTER_MAX_PRICE_PER_MTOK,
+                                       "completion": OPENROUTER_MAX_PRICE_PER_MTOK}}
+    if effective["reasoning_effort"]:
+        extra["reasoning"] = {"effort": effective["reasoning_effort"]}
+    return extra
+
+
+def cached_cheapest_model(api_key: str) -> str:
+    """The cheapest eligible OpenRouter model, from the cache only (no fetch)."""
+    if not api_key:
+        return ""
+    with _openrouter_lock:
+        hit = _openrouter_cache.get(_cache_key(api_key))
+    if not hit:
+        return ""
+    cheapest, _all = hit[1]
+    return cheapest[0] if cheapest else ""
+
+
+def split_extra(extra: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split one turn's request fields into (extra_body, plain SDK kwargs)."""
+    body = {k: v for k, v in (extra or {}).items() if k in EXTRA_BODY_KEYS}
+    rest = {k: v for k, v in (extra or {}).items() if k not in EXTRA_BODY_KEYS}
+    return body, rest
+
+
+def param_payload(cfg: Config, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """What the UI needs: the field spec, the defaults and the effective values."""
+    return {
+        "spec": [dict(spec) for spec in PARAM_SPEC],
+        "defaults": default_params(cfg),
+        "effective": effective_params(cfg, overrides),
+    }
+
+
+def provider_has_key(prov: Provider) -> bool:
+    """True when this provider's API key is present in the environment."""
+    return bool(provider_api_key(prov.api_key_env))
+
+
+def default_provider_name(cfg: Config) -> str:
+    """Provider a session starts on.
+
+    ``[llm] default_provider`` wins; without it (or without its API key) the
+    provider matching the top-level [llm] block is used, then the first one that
+    has a key at all, so a missing key never leaves the chat without a model.
+    """
+    providers = cfg.providers or {}
+    wanted = (cfg.llm.default_provider or "").strip()
+    if wanted and wanted in providers and provider_has_key(providers[wanted]):
+        return wanted
+    fallback = next(
         (x for x, p in providers.items() if p.base_url == cfg.llm.base_url),
-        names[0] if names else "default",
+        next(iter(providers), "default"),
     )
+    if fallback in providers and provider_has_key(providers[fallback]):
+        return fallback
+    return next((x for x, p in providers.items() if provider_has_key(p)), fallback)
 
 
 def resolve_llm(cfg: Config, provider_name: str | None = None,
-                model_name: str | None = None) -> dict[str, Any]:
-    """Provider + model for a turn. Pure: unknown picks fall back to defaults.
+                model_name: str | None = None,
+                params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Provider + model + parameter overrides for a turn.
 
-    Returns ``{"provider", "base_url", "model", "api_key", "extra"}``; the caller
-    may store ``provider`` back into the session to normalise an invalid pick.
+    Pure: unknown picks fall back to defaults. Returns ``{"provider",
+    "base_url", "model", "api_key", "extra"}``; the caller may store ``provider``
+    back into the session to normalise an invalid pick.
     """
     providers = cfg.providers or {}
     default_provider = default_provider_name(cfg)
@@ -173,7 +367,8 @@ def resolve_llm(cfg: Config, provider_name: str | None = None,
     if prov is None:
         return {"provider": "default", "base_url": cfg.llm.base_url,
                 "model": cfg.llm.default_model,
-                "api_key": provider_api_key("API_KEY"), "extra": None}
+                "api_key": provider_api_key("API_KEY"),
+                "extra": build_extra(cfg, params, None)}
     models = list(prov.models) or [prov.default_model]
     api_key = provider_api_key(prov.api_key_env)
     if "openrouter" in prov.base_url:
@@ -185,7 +380,7 @@ def resolve_llm(cfg: Config, provider_name: str | None = None,
     else:
         model = model_name if model_name in models else prov.default_model
     return {"provider": provider_name, "base_url": prov.base_url, "model": model,
-            "api_key": api_key, "extra": None}
+            "api_key": api_key, "extra": build_extra(cfg, params, provider_name)}
 
 
 # Per-read timeout: a stream that produces no chunk for this long is a hung

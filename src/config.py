@@ -39,6 +39,8 @@ class Provider:
     models: tuple[str, ...]
     # environment variable holding the API key for this provider
     api_key_env: str = "API_KEY"
+    # short hint shown in the picker (e.g. "fallback")
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,10 @@ class LLMConfig:
     default_model: str
     models: tuple[str, ...]
     providers: dict[str, Provider] | None = None
+    # Per-session LLM parameters and their defaults (see [llm.params]).
+    params: dict[str, object] = field(default_factory=dict)
+    # Provider a new session starts on (falls back to the first with a key).
+    default_provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,8 @@ def _llm_from(raw_llm: dict, name: str = "llm") -> LLMConfig:
         base_url=raw_llm["base_url"],
         default_model=raw_llm["default_model"],
         models=tuple(raw_llm["models"]),
+        params=dict(raw_llm.get("params") or {}),
+        default_provider=str(raw_llm.get("default_provider") or ""),
     )
 
 
@@ -84,6 +92,7 @@ def get_config() -> Config:
             default_model=prov["default_model"],
             models=tuple(prov["models"]),
             api_key_env=prov.get("api_key_env", "API_KEY"),
+            note=prov.get("note", ""),
         )
     return Config(
         cluster=ClusterConfig(**cluster_raw),

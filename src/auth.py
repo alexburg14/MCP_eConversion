@@ -55,6 +55,9 @@ class Session:
     model_name: str | None = None
     elab_token: str | None = None
     dt_token: str | None = None
+    # Per-session LLM parameter overrides (see llm.PARAM_SPEC); only the values
+    # that differ from config.toml are stored.
+    llm_params: dict[str, object] = field(default_factory=dict)
     elab_tools: int = 0
     dt_tools: int = 0
     remote: Any = None                          # mcp_clients.RemoteClients or None

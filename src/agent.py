@@ -29,6 +29,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+
+import llm
 from typing import Any, Callable, Iterator
 
 import openai
@@ -223,12 +225,14 @@ def _run_rounds(client: Any, model: str, messages: list[dict], system_prompt: st
     kwargs: dict[str, Any] = {"tools": tools} if tools else {}
     extra_body: dict | None = None
     if extra:
-        # OpenRouter-specific fields (provider routing, zdr, ...) must go in
-        # extra_body; the OpenAI SDK rejects unknown top-level kwargs.
-        if "provider" in extra:
-            extra_body = {"provider": extra["provider"]}
-        else:
-            kwargs.update(extra)
+        # OpenRouter-only fields (provider routing, reasoning, verbosity, ...) must
+        # go in extra_body; the OpenAI SDK rejects unknown top-level kwargs. The
+        # rest (temperature, top_p, max_tokens, parallel_tool_calls) is plain SDK
+        # surface and goes in as a normal argument. See llm.split_extra.
+        body, rest = llm.split_extra(extra)
+        if body:
+            extra_body = body
+        kwargs.update(rest)
 
     tool_log, tool_meta, usage, start = p.tool_log, p.tool_meta, p.usage, p.start
     # Text the user has seen so far, one entry per round: the stored answer must

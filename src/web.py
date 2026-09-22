@@ -16,6 +16,7 @@ import asyncio
 import html
 import json
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -59,9 +60,63 @@ EXAMPLES = [
 ]
 
 SOURCES = {
-    "elab": {"label": "eLabFTW", "register_url": "https://researchmcp.duckdns.org/el/register"},
-    "dt": {"label": "DataTagger", "register_url": "https://researchmcp.duckdns.org/dt/register"},
+    "elab": {
+        "label": "eLabFTW",
+        "register_url": "https://researchmcp.duckdns.org/el/register",
+        # internal: the app registers the key for the user (POST /api/session/register)
+        "register_api": os.environ.get("ELAB_REGISTER_API", "http://elabmcp-proxy:8081/register"),
+        "base_url_default": "https://elntest.ub.tum.de",
+        "key_label": "elabFTW API key",
+        "profiles": {"h": "Hybrid (recommended)", "r": "Read-only", "f": "Full"},
+        "test_token_env": "ELABFTW_TEST_TOKEN",
+    },
+    "dt": {
+        "label": "DataTagger",
+        "register_url": "https://researchmcp.duckdns.org/dt/register",
+        "register_api": os.environ.get("DT_REGISTER_API", "http://datatagger-proxy:8000/register"),
+        "base_url_default": "https://datatagger.ub.tum.de",
+        "key_label": "DataTagger API token",
+        "profiles": {},
+        "test_token_env": "DATATAGGER_TEST_TOKEN",
+    },
 }
+
+# Fields a source may expose to the browser (never tokens or internal URLs).
+# "profiles" is built explicitly below -- it must always serialise as a list.
+_SOURCE_UI_KEYS = ("label", "base_url_default", "key_label")
+
+# The proxies answer /register with an HTML page whose only machine-readable part
+# is the MCP URL; pull the token out of it.
+_TOKEN_RE = re.compile(r"[?&]token=([A-Za-z0-9._\-]+)")
+_REGISTER_MESSAGES = {
+    400: "Registration rejected — check the base URL.",
+    401: "The API key was rejected by the service.",
+    403: "The key is valid but has no access.",
+    500: "The registration service is misconfigured.",
+}
+
+
+def _post_registration(url: str, data: dict) -> tuple[int, str]:
+    """Blocking POST to a proxy's /register page (always called in a worker thread)."""
+    with httpx.Client(timeout=REGISTER_TIMEOUT_S, follow_redirects=True) as client:
+        response = client.post(url, data=data)
+        return response.status_code, response.text
+
+
+def _test_token(src: dict) -> str:
+    """The deployment's test-account token, read server-side only (never logged)."""
+    return (os.environ.get(src.get("test_token_env", "")) or "").strip()
+
+
+def source_public(src: dict) -> dict:
+    """What the browser may see about a source -- tokens and internal URLs stay here."""
+    out = {k: src[k] for k in _SOURCE_UI_KEYS if k in src}
+    # always a list: the browser iterates it (a {} here broke the connect dialog)
+    out["profiles"] = [{"value": value, "label": label}
+                       for value, label in (src.get("profiles") or {}).items()]
+    if _test_token(src):
+        out["test_user"] = {"label": "test account"}
+    return out
 
 # The registration pages answer with X-Frame-Options: SAMEORIGIN, so a browser
 # refuses to render them in the connect dialog's inset. /api/register/{kind}
@@ -142,6 +197,18 @@ class ChatRequest(BaseModel):
 class ModelRequest(BaseModel):
     provider: str
     model: str = ""     # "" = provider default (OpenRouter: cheapest eligible)
+    sort: str = ""      # OpenRouter route: price | throughput | latency
+
+
+class RegisterRequest(BaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    profile: str = ""
+
+
+class ParamsRequest(BaseModel):
+    # Only the values that differ from the defaults; "" clears one back to them.
+    params: dict[str, object] = Field(default_factory=dict)
 
 
 class TokenRequest(BaseModel):
@@ -158,19 +225,31 @@ class FeedbackRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _selection(state: AppState, session: auth.Session) -> dict:
-    """Provider/model as chosen, without any network (no OpenRouter auto-pick)."""
+    """Provider, model and parameters as chosen -- no network (no auto-pick)."""
     providers = state.cfg.providers or {}
     name = session.provider_name if session.provider_name in providers else llm.default_provider_name(state.cfg)
     prov = providers.get(name)
     if prov is None:
-        return {"provider": name, "model": state.cfg.llm.default_model, "auto": False}
-    models = list(prov.models) or [prov.default_model]
-    openrouter = "openrouter" in prov.base_url
-    if session.model_name in models:
-        return {"provider": name, "model": session.model_name, "auto": False}
-    if openrouter:
-        return {"provider": name, "model": "", "auto": True}
-    return {"provider": name, "model": prov.default_model, "auto": False}
+        out = {"provider": name, "model": state.cfg.llm.default_model, "auto": False}
+    else:
+        models = list(prov.models) or [prov.default_model]
+        if session.model_name in models:
+            out = {"provider": name, "model": session.model_name, "auto": False}
+        elif "openrouter" in prov.base_url:
+            out = {"provider": name, "model": "", "auto": True}
+        else:
+            out = {"provider": name, "model": prov.default_model, "auto": False}
+    out["params"] = llm.effective_params(state.cfg, session.llm_params)
+    if prov is not None and "openrouter" in prov.base_url:
+        route = out["params"]["provider_sort"]
+        out["sort"] = route
+        out["route_label"] = llm.route_label(route)
+        # the concrete model the route resolves to, from the cached catalogue
+        # (never fetched here: _selection must not do network I/O)
+        out["auto_model"] = True
+        out["resolved_model"] = llm.cached_cheapest_model(
+            api_key=llm.provider_api_key(prov.api_key_env))
+    return out
 
 
 def _tools_available(state: AppState, session: auth.Session) -> dict:
@@ -192,6 +271,9 @@ def _session_view(state: AppState, session: auth.Session) -> dict:
         "session": session.id,
         "user": session.identity.display or None,
         "provider": sel["provider"], "model": sel["model"], "auto_model": sel["auto"],
+        "sort": sel.get("sort"), "route_label": sel.get("route_label"),
+        "resolved_model": sel.get("resolved_model"),
+        "params": sel["params"],
         "connected": {
             kind: {"active": bool(getattr(session, f"{kind}_token")),
                    "tools": getattr(session, f"{kind}_tools") if getattr(session, f"{kind}_token") else 0}
@@ -345,7 +427,8 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
     def config():
         providers = {
             name: {"models": list(p.models), "default_model": p.default_model,
-                   "base_url": p.base_url, "openrouter": "openrouter" in p.base_url}
+                   "base_url": p.base_url, "note": p.note,
+                   "openrouter": "openrouter" in p.base_url}
             for name, p in (state.cfg.providers or {}).items()
         }
         return {
@@ -355,8 +438,10 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             "placeholder": f"Ask about {state.n_papers} papers across {state.n_pis} PIs/groups in the cluster…",
             "examples": state.examples,
             "providers": providers,
+            "routes": [dict(route) for route in llm.ROUTE_OPTIONS],
+            "parameters": llm.param_payload(state.cfg),
             "default_provider": llm.default_provider_name(state.cfg),
-            "sources": state.sources,
+            "sources": {kind: source_public(src) for kind, src in state.sources.items()},
             "max_tool_rounds": agent.MAX_TOOL_ROUNDS,
             "version": telemetry.version_info(),
         }
@@ -375,13 +460,40 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             raise HTTPException(400, detail={"error": f"Unknown model for {req.provider}: {model}"})
         session.provider_name = req.provider
         session.model_name = model or None
+        if "openrouter" in prov.base_url and req.sort in llm.ROUTE_VALUES:
+            session.llm_params = {**session.llm_params,
+                                  "provider_sort": llm.normalize_param("provider_sort", req.sort)}
         return _selection(state, session)
 
-    @app.post("/api/session/connect/{kind}")
-    async def connect(kind: str, req: TokenRequest, session: auth.Session = Depends(get_session)):
-        if kind not in state.sources:
-            raise HTTPException(404, detail={"error": f"Unknown source: {kind}"})
-        token = req.token.strip()
+    @app.post("/api/session/params")
+    def set_params(req: ParamsRequest, session: auth.Session = Depends(get_session)):
+        """Store this session's parameter overrides (only deviations are kept)."""
+        defaults = llm.default_params(state.cfg)
+        clean: dict[str, object] = {}
+        for key, value in (req.params or {}).items():
+            if key not in llm.PARAM_KEYS:
+                raise HTTPException(400, detail={"error": f"Unknown parameter: {key}"})
+            try:
+                canonical = llm.normalize_param(key, value)
+            except ValueError as exc:
+                raise HTTPException(400, detail={"error": str(exc)}) from None
+            if canonical != defaults[key]:
+                clean[key] = canonical
+        with session.lock:
+            session.llm_params = clean
+        return {"params": llm.effective_params(state.cfg, session.llm_params),
+                "defaults": defaults}
+
+    @app.delete("/api/session/params")
+    def reset_params(session: auth.Session = Depends(get_session)):
+        """Back to the config.toml defaults."""
+        with session.lock:
+            session.llm_params = {}
+        return {"params": llm.effective_params(state.cfg, session.llm_params),
+                "defaults": llm.default_params(state.cfg)}
+
+    async def _connect_with_token(kind: str, token: str, session: auth.Session) -> dict:
+        """Log one source in with a token: manual paste and test account share this."""
         setattr(session, f"{kind}_token", token or None)
         setattr(session, f"{kind}_tools", 0)
         _rebuild_remote(state, session)
@@ -403,6 +515,69 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
             if other != kind and getattr(session, f"{other}_token"):
                 setattr(session, f"{other}_tools", _count_source_tools(schemas, other)[0])
         return {"kind": kind, "active": True, "tools": found, "error": None}
+
+    @app.post("/api/session/connect/{kind}")
+    async def connect(kind: str, req: TokenRequest, session: auth.Session = Depends(get_session)):
+        if kind not in state.sources:
+            raise HTTPException(404, detail={"error": f"Unknown source: {kind}"})
+        return await _connect_with_token(kind, req.token.strip(), session)
+
+    @app.post("/api/session/connect/{kind}/test")
+    async def connect_test_account(kind: str, session: auth.Session = Depends(get_session)):
+        """Sign in with the test account this deployment is configured with.
+
+        The token comes from an environment variable on the server, so the button
+        only ever carries a label and the value never reaches the browser.
+        """
+        if kind not in state.sources:
+            raise HTTPException(404, detail={"error": f"Unknown source: {kind}"})
+        token = _test_token(state.sources[kind])
+        if not token:
+            raise HTTPException(404, detail={"error": f"No test account configured for {kind}"})
+        return await _connect_with_token(kind, token, session)
+
+    @app.post("/api/session/register/{kind}")
+    async def register_source(kind: str, req: RegisterRequest,
+                              session: auth.Session = Depends(get_session)):
+        """Register an API key upstream and connect in one step.
+
+        The dialog collects base URL + API key; the proxy validates the key and
+        returns a signed MCP token, which is the only thing kept here. Neither the
+        key nor the token is logged, and the key is never echoed back.
+        """
+        src = state.sources.get(kind)
+        if src is None:
+            raise HTTPException(404, detail={"error": f"Unknown source: {kind}"})
+        api_key = req.api_key.strip()
+        base_url = (req.base_url or src.get("base_url_default") or "").strip().rstrip("/")
+        if not api_key or not base_url:
+            raise HTTPException(400, detail={"error": "Base URL and API key are required."})
+        form = {"api_key": api_key, "base_url": base_url, "validated": "1"}
+        profiles = src.get("profiles") or {}
+        if profiles:
+            form["profile"] = req.profile if req.profile in profiles else next(iter(profiles))
+        # Step 1 (validated=0) is the only step that checks the key against the
+        # upstream API. Step 2 mints the token without looking at it again, so
+        # skipping this would happily connect a typo. Same two steps as the form.
+        try:
+            status, body = await run_in_threadpool(
+                _post_registration, src["register_api"], {**form, "validated": "0"})
+        except Exception as exc:  # noqa: BLE001 -- proxy down, DNS, timeout
+            raise HTTPException(502, detail={
+                "error": f"Registration service unreachable ({type(exc).__name__})."}) from None
+        if status >= 400:
+            raise HTTPException(400, detail={"error": _REGISTER_MESSAGES.get(
+                status, "Registration failed — check the base URL and the key.")})
+        try:
+            status, body = await run_in_threadpool(_post_registration, src["register_api"], form)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, detail={
+                "error": f"Registration service unreachable ({type(exc).__name__})."}) from None
+        match = _TOKEN_RE.search(body or "")
+        if status >= 400 or match is None:
+            raise HTTPException(400, detail={"error": _REGISTER_MESSAGES.get(
+                status, "Registration failed — check the base URL and the key.")})
+        return await _connect_with_token(kind, match.group(1), session)
 
     @app.delete("/api/session/connect/{kind}")
     def disconnect(kind: str, session: auth.Session = Depends(get_session)):
@@ -474,7 +649,8 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
         if not prompt:
             return JSONResponse({"error": "Empty prompt."}, status_code=400)
         resolved = await run_in_threadpool(
-            llm.resolve_llm, state.cfg, session.provider_name, session.model_name)
+            llm.resolve_llm, state.cfg, session.provider_name, session.model_name,
+            dict(session.llm_params))
         session.provider_name = resolved["provider"]
         if not resolved["api_key"]:
             prov = (state.cfg.providers or {}).get(resolved["provider"])

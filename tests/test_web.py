@@ -155,22 +155,37 @@ def test_reset_starts_a_new_conversation_with_a_new_id(client, harness):
     assert client.get("/api/session").json()["messages"] == []
 
 
+def test_gwdg_is_the_fallback_when_openrouter_has_no_key(client, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert client.get("/api/config").json()["default_provider"] == "gwdg"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    assert client.get("/api/config").json()["default_provider"] == "openrouter"
+    # and a fresh session starts on it
+    client.get("/api/session")
+    assert client.get("/api/session").json()["provider"] == "openrouter"
+
+
 def test_model_selection_is_validated_and_reflected_in_the_stream(client, harness):
     client.get("/api/session")
     assert client.post("/api/session/model", json={"provider": "nope", "model": ""}).status_code == 400
     assert client.post("/api/session/model", json={"provider": "gwdg", "model": "nope"}).status_code == 400
-    r = client.post("/api/session/model", json={"provider": "gwdg", "model": "glm-5.3-flash"})
-    assert r.json() == {"provider": "gwdg", "model": "glm-5.3-flash", "auto": False}
+    # the gwdg list is deliberately short (one model), openrouter only offers auto
+    r = client.post("/api/session/model", json={"provider": "gwdg", "model": "qwen3.8-27b"})
+    assert r.json()["model"] == "qwen3.8-27b" and r.json()["auto"] is False
     evs = events(chat(client, "q"))
-    assert evs[0][1]["model"] == "glm-5.3-flash"
-    assert client.get("/api/session").json()["messages"][-1]["meta"]["model"] == "glm-5.3-flash"
+    assert evs[0][1]["model"] == "qwen3.8-27b"
+    assert client.get("/api/session").json()["messages"][-1]["meta"]["model"] == "qwen3.8-27b"
 
 
 def test_openrouter_without_pick_reports_auto(client, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     client.get("/api/session")
     r = client.post("/api/session/model", json={"provider": "openrouter", "model": ""}).json()
-    assert r == {"provider": "openrouter", "model": "", "auto": True}
+    assert r["provider"] == "openrouter" and r["model"] == "" and r["auto"] is True
+    # no static OpenRouter models are offered any more - auto is the only choice
+    assert client.get("/api/config").json()["providers"]["openrouter"]["models"] == []
+    assert client.post("/api/session/model",
+                       json={"provider": "openrouter", "model": "openai/gpt-4o"}).status_code == 400
 
 
 def test_feedback_records_the_last_turn(client, harness, tmp_path):
@@ -197,6 +212,108 @@ def test_corpus_map_and_collaboration_graph_endpoints(client):
     m = client.get("/api/corpus-map", params={"clusters": 3}).json()
     assert m["available"] is True and len(m["points"]) == 3 and m["legend"]
     assert client.get("/api/collaboration-graph").json() == {"nodes": [], "links": []}
+
+
+def test_test_account_is_offered_only_when_configured(client, monkeypatch):
+    sources = client.get("/api/config").json()["sources"]
+    assert "test_user" not in sources["dt"]
+    # profiles is iterated by the UI -> a list, also when a source has none
+    assert sources["dt"]["profiles"] == [] and isinstance(sources["dt"]["profiles"], list)
+    assert [p["value"] for p in sources["elab"]["profiles"]] == ["h", "r", "f"]
+    assert sources["elab"]["base_url_default"].startswith("https://")
+    monkeypatch.setenv("DATATAGGER_TEST_TOKEN", "secret-token")
+    body = client.get("/api/config")
+    assert body.json()["sources"]["dt"]["test_user"]["label"] == "test account"
+    # neither the token nor the env var name is exposed
+    assert "test_token_env" not in body.json()["sources"]["dt"]
+    assert "secret-token" not in body.text
+
+
+def test_test_account_endpoint_signs_in(client, monkeypatch):
+    monkeypatch.setenv("DATATAGGER_TEST_TOKEN", "dt-good")
+
+    class FakeRemote:
+        def __init__(self, elab_token=None, dt_token=None):
+            self.elab_token, self.dt_token = elab_token, dt_token
+
+        def build_openai_tools(self):
+            if self.dt_token == "dt-good":
+                return [{"type": "function", "function": {"name": "dt_list_projects", "description": "d",
+                                                          "parameters": {"type": "object", "properties": {}}}}]
+            return [{"type": "function", "function": {
+                "name": "dt___unavailable__", "description": "Source dt is unavailable. Error: bad token",
+                "parameters": {"type": "object", "properties": {}}}}]
+
+    monkeypatch.setattr(client.app.state.app_state, "remote_factory", FakeRemote)
+    client.get("/api/session")
+    r = client.post("/api/session/connect/dt/test", json={})
+    assert r.status_code == 200 and r.json()["active"] is True and r.json()["tools"] == 1
+    assert client.get("/api/session").json()["connected"]["dt"] == {"active": True, "tools": 1}
+    # without a configured account the endpoint is a 404
+    monkeypatch.delenv("DATATAGGER_TEST_TOKEN")
+    assert client.post("/api/session/connect/dt/test", json={}).status_code == 404
+
+
+def test_register_endpoint_creates_a_token_and_connects(client, monkeypatch):
+    seen = {}
+
+    class FakeRemote:
+        def __init__(self, elab_token=None, dt_token=None):
+            self.dt_token = dt_token
+
+        def build_openai_tools(self):
+            if self.dt_token == "tok-good":
+                return [{"type": "function", "function": {"name": "dt_list_projects", "description": "d",
+                                                          "parameters": {"type": "object", "properties": {}}}}]
+            return [{"type": "function", "function": {
+                "name": "dt___unavailable__", "description": "Source dt unavailable. Error: bad",
+                "parameters": {"type": "object", "properties": {}}}}]
+
+    calls = []
+
+    def fake_post(url, data):
+        calls.append(dict(data))
+        if data.get("validated") == "0":        # validation step answers with a form
+            return 200, "<h2>Select profile</h2>"
+        return 200, f"<div class=\'url-box\'>{url}?token=tok-good</div>"
+
+    monkeypatch.setattr(client.app.state.app_state, "remote_factory", FakeRemote)
+    monkeypatch.setattr(web, "_post_registration", fake_post)
+    client.get("/api/session")
+    r = client.post("/api/session/register/dt",
+                    json={"base_url": "https://datatagger.example", "api_key": "the-key"})
+    assert r.status_code == 200 and r.json()["active"] is True and r.json()["tools"] == 1
+    # the key is validated first, then the token is minted, and never echoed back
+    assert [c["validated"] for c in calls] == ["0", "1"]
+    assert all(c["api_key"] == "the-key" for c in calls)
+    assert calls[0]["base_url"] == "https://datatagger.example"
+    assert "the-key" not in r.text
+    session = next(iter(client.app.state.app_state.sessions._by_cookie.values()))
+    assert session.dt_token == "tok-good"
+
+
+def test_register_endpoint_reports_bad_keys_and_missing_input(client, monkeypatch):
+    calls = []
+
+    def reject(url, data):
+        calls.append(data.get("validated"))
+        return 401, "<h2>Invalid Key</h2>"
+
+    monkeypatch.setattr(web, "_post_registration", reject)
+    client.get("/api/session")
+    bad = client.post("/api/session/register/dt",
+                      json={"base_url": "https://dt.example", "api_key": "nope"})
+    assert bad.status_code == 400 and "rejected" in bad.json()["detail"]["error"].lower()
+    # a key rejected in the validation step never reaches the token step
+    assert calls == ["0"]
+    assert client.post("/api/session/register/dt", json={"api_key": ""}).status_code == 400
+    assert client.post("/api/session/register/nope", json={"api_key": "x"}).status_code == 404
+    # profile defaults to the first configured one for eLabFTW
+    seen = {}
+    monkeypatch.setattr(web, "_post_registration",
+                        lambda url, data: (seen.update(data), (400, "x"))[1])
+    client.post("/api/session/register/elab", json={"api_key": "k", "profile": "nonsense"})
+    assert seen["profile"] == "h"
 
 
 def test_connect_success_and_failure(client, harness, monkeypatch):
@@ -306,13 +423,16 @@ def test_two_sessions_are_isolated(state, harness):
     with TestClient(app) as a, TestClient(app) as b:
         harness.scripts = [[text_chunk("A")], [text_chunk("B")]]
         a.get("/api/session"); b.get("/api/session")
-        a.post("/api/session/model", json={"provider": "gwdg", "model": "glm-5.3-flash"})
+        a.post("/api/session/model", json={"provider": "gwdg", "model": "qwen3.8-27b"})
+        a.post("/api/session/params", json={"params": {"top_p": "0.9"}})
         chat(a, "from a")
         chat(b, "from b")
         va, vb = a.get("/api/session").json(), b.get("/api/session").json()
         assert va["session"] != vb["session"]
         assert va["messages"][0]["content"] == "from a" and vb["messages"][0]["content"] == "from b"
-        assert va["model"] == "glm-5.3-flash" and vb["model"] == "qwen3.8-27b"
+        assert va["model"] == "qwen3.8-27b" and vb["model"] == "qwen3.8-27b"
+        # parameters are per session too
+        assert va["params"]["top_p"] == "0.9" and vb["params"]["top_p"] == ""
 
 
 def test_root_path_mounts_everything_under_the_prefix(state):

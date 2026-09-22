@@ -71,25 +71,57 @@
 
 <main id="view" class="view"></main>
 
-<dialog id="dlg-connect" class="dlg wide">
+<dialog id="dlg-connect" class="dlg">
   <form method="dialog" class="dlg-body">
     <header class="dlg-head">
       <h2 id="connect-title">Connect</h2>
       <button class="btn ghost icon" value="cancel" aria-label="Close">✕</button>
     </header>
-    <p class="muted" id="connect-hint">Register below — you stay inside the app. Then paste the token.</p>
-    <div class="iframe-wrap"><iframe id="connect-frame" title="Registration" referrerpolicy="no-referrer"
-    sandbox="allow-forms allow-scripts"></iframe></div>
-    <p class="muted small">If the form does not load here, <a id="connect-link" href="#" target="_blank" rel="noopener">open it in a new tab</a>.</p>
+    <p class="muted" id="connect-hint">Sign in with your account — the token is created for you and stays on the server.</p>
     <label class="field">
-      <span id="connect-label">Token</span>
-      <input type="password" id="connect-token" autocomplete="off" placeholder="Paste the token from the form above">
+      <span id="connect-base-label">Base URL</span>
+      <input type="text" id="connect-base" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span id="connect-key-label">API key</span>
+      <input type="password" id="connect-key" autocomplete="off" placeholder="Paste your API key">
+    </label>
+    <label class="field" id="connect-profile-field" hidden>
+      <span>Access profile</span>
+      <select id="connect-profile"></select>
     </label>
     <p class="error" id="connect-error" hidden></p>
+    <details class="connect-manual">
+      <summary class="muted small">I already have an MCP token</summary>
+      <label class="field">
+        <span id="connect-label">Token</span>
+        <input type="password" id="connect-token" autocomplete="off" placeholder="Paste an existing token">
+      </label>
+      <button type="button" class="btn" id="connect-submit">Use this token</button>
+    </details>
     <footer class="dlg-foot">
+      <button type="button" class="btn ghost" id="connect-test" hidden>Sign in as test account</button>
       <button type="button" class="btn danger ghost" id="connect-disconnect">Disconnect</button>
       <span class="spacer"></span>
-      <button type="button" class="btn primary" id="connect-submit">Connect</button>
+      <button type="button" class="btn primary" id="connect-register">Connect</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog id="dlg-params" class="dlg">
+  <form method="dialog" class="dlg-body">
+    <header class="dlg-head">
+      <h2>Parameters</h2>
+      <button class="btn ghost icon" value="cancel" aria-label="Close">✕</button>
+    </header>
+    <p class="muted small">Applies to this session only. “default” means the field is not sent,
+      so the provider's own value is used. Routing and reasoning only affect OpenRouter turns.</p>
+    <div id="params-body"></div>
+    <p class="error" id="params-error" hidden></p>
+    <footer class="dlg-foot">
+      <button type="button" class="btn danger ghost" id="params-reset">Reset defaults</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" id="params-apply">Apply</button>
     </footer>
   </form>
 </dialog>
