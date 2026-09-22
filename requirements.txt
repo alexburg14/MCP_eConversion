@@ -18,7 +18,7 @@ networkx
 openai
 fastapi
 uvicorn[standard]
-# mirrors the registration pages same-origin (web.py) and backs fastapi.testclient
+# model-client timeouts (llm.py), source registration (web.py), fastapi.testclient
 httpx
 # tests
 pytest

@@ -13,7 +13,6 @@ bridges its events to the HTTP response and owns the session bookkeeping
 from __future__ import annotations
 
 import asyncio
-import html
 import json
 import os
 import random
@@ -28,7 +27,7 @@ from typing import Any, Callable
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -82,7 +81,6 @@ N_EXAMPLES = 4
 SOURCES = {
     "elab": {
         "label": "eLabFTW",
-        "register_url": "https://researchmcp.duckdns.org/el/register",
         # internal: the app registers the key for the user (POST /api/session/register)
         "register_api": os.environ.get("ELAB_REGISTER_API", "http://elabmcp-proxy:8081/register"),
         "base_url_default": "https://elntest.ub.tum.de",
@@ -92,7 +90,6 @@ SOURCES = {
     },
     "dt": {
         "label": "DataTagger",
-        "register_url": "https://researchmcp.duckdns.org/dt/register",
         "register_api": os.environ.get("DT_REGISTER_API", "http://datatagger-proxy:8000/register"),
         "base_url_default": "https://datatagger.ub.tum.de",
         "key_label": "DataTagger API token",
@@ -138,11 +135,8 @@ def source_public(src: dict) -> dict:
         out["test_user"] = {"label": "test account"}
     return out
 
-# The registration pages answer with X-Frame-Options: SAMEORIGIN, so a browser
-# refuses to render them in the connect dialog's inset. /api/register/{kind}
-# mirrors them from this origin instead -- see the route for the trust model.
+# How long _post_registration waits on a proxy's /register endpoint.
 REGISTER_TIMEOUT_S = 20.0
-MAX_REGISTER_BYTES = 1_000_000
 
 _PIPELINE_STAGES = [
     ("papers", "papers (DOI csv)", "count"),
@@ -433,20 +427,6 @@ class RevalidatingStatic(StaticFiles):
         return response
 
 
-def _register_fallback_html(label: str, url: str, reason: str) -> str:
-    """Shown inside the inset when the upstream page cannot be mirrored."""
-    return (
-        "<!doctype html><meta charset='utf-8'>"
-        "<style>body{margin:0;display:flex;align-items:center;justify-content:center;"
-        "height:100vh;font:14px/1.5 system-ui,sans-serif;color:#454D57;background:#FAFBFC;"
-        "text-align:center;padding:20px}a{color:#3B72B0}</style>"
-        f"<div><p>The {html.escape(label)} registration form could not be loaded here "
-        f"({html.escape(reason)}).</p>"
-        f"<p><a href='{html.escape(url, quote=True)}' target='_blank' rel='noopener noreferrer'>"
-        "Open it in a new tab</a>, then paste the token below.</p></div>"
-    )
-
-
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -640,46 +620,6 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
         setattr(session, f"{kind}_tools", 0)
         _rebuild_remote(state, session)
         return {"kind": kind, "active": False, "tools": 0, "error": None}
-
-    @app.api_route("/api/register/{kind}", methods=["GET", "POST"], include_in_schema=False)
-    async def register_proxy(kind: str, request: Request):
-        """Mirror a source's registration page from this origin.
-
-        The upstream sends ``X-Frame-Options: SAMEORIGIN``; framed from this
-        app's origin it renders blank, which is what the inset used to show.
-        Only the two configured URLs are reachable -- ``kind`` indexes the
-        table, nothing here is caller-supplied. The credentials the user types
-        pass through this server on their way upstream, so nothing about the
-        request or the response is logged or stored, and no cookie is relayed
-        in either direction. The frame is sandboxed without
-        ``allow-same-origin`` (see index.html), so the mirrored HTML runs in an
-        opaque origin and cannot reach this app's session cookie or DOM.
-        """
-        src = state.sources.get(kind)
-        if src is None:
-            raise HTTPException(404, detail={"error": f"Unknown source: {kind}"})
-        url = src["register_url"]
-        body = await request.body() if request.method == "POST" else None
-        if body is not None and len(body) > MAX_REGISTER_BYTES:
-            raise HTTPException(413, detail={"error": "Registration form too large."})
-        headers = {"accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"}
-        if ctype := request.headers.get("content-type"):
-            headers["content-type"] = ctype
-        try:
-            async with httpx.AsyncClient(timeout=REGISTER_TIMEOUT_S, follow_redirects=True) as client:
-                up = await client.request(request.method, url, content=body, headers=headers)
-        except httpx.HTTPError as exc:
-            log.warning("registration page unreachable",
-                        extra={"fields": {"kind": kind, "error": type(exc).__name__}})
-            return HTMLResponse(_register_fallback_html(src["label"], url, "the service did not respond"),
-                                status_code=502, headers={"Cache-Control": "no-store"})
-        if "html" not in up.headers.get("content-type", ""):
-            return HTMLResponse(_register_fallback_html(src["label"], url, f"HTTP {up.status_code}"),
-                                status_code=502, headers={"Cache-Control": "no-store"})
-        # Upstream headers are dropped on purpose: X-Frame-Options would blank
-        # the inset again, and Set-Cookie would land on this app's origin.
-        return HTMLResponse(up.text, status_code=up.status_code,
-                            headers={"Cache-Control": "no-store"})
 
     @app.post("/api/chat/reset")
     def reset(session: auth.Session = Depends(get_session)):
