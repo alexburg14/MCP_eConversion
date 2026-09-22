@@ -298,6 +298,9 @@ button { font: inherit; }
 
 .dlg.tall .dlg-body { max-height: 88vh; overflow: auto; }
 .stats { font-size: 13.5px; display: flex; flex-direction: column; gap: 14px; }
+.pipeline-box { border-top: 1px solid var(--hair); padding-top: 12px; }
+.pipeline-box summary { cursor: pointer; font-size: 13.5px; color: var(--ink-2); }
+.pipeline-box iframe { width: 100%; height: 70vh; border: 1px solid var(--hair); border-radius: 10px; margin-top: 10px; background: transparent; display: block; }
 .stats h3 { font: 500 11.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin: 0 0 6px; }
 .stats table { border-collapse: collapse; width: 100%; }
 .stats th, .stats td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--hair); }

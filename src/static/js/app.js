@@ -5,7 +5,6 @@ import { chatView } from "./chat.js";
 import { initDialogs, toast } from "./settings.js";
 import { corpusMapView } from "./views/corpus-map.js";
 import { collaborationView } from "./views/collaboration.js";
-import { pipelineView } from "./views/pipeline.js";
 
 export const store = {
   config: null,
@@ -53,7 +52,6 @@ async function boot() {
     "chat": chatView(store),
     "corpus-map": corpusMapView(store),
     "collaboration": collaborationView(store),
-    "pipeline": pipelineView(store),
   }, { container: view, nav: document.getElementById("nav") });
   router.start();
 }
