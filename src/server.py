@@ -287,6 +287,19 @@ def get_proposal_fulltext(
 
 _Limit = Annotated[int, Field(description="How many papers to return (default 5, at most 50); "
                                           "raise it for 'list all' questions", ge=1, le=50)]
+# Beyond this many results a listing is what is wanted, not a reading: the
+# abstracts are cut so fifty papers do not cost the model 60k characters.
+_ABSTRACT_IN_LIST = 500
+_LIST_FROM = 10
+
+
+def _trimmed(results: list[dict], limit: int) -> list[dict]:
+    if limit <= _LIST_FROM:
+        return results
+    for r in results:
+        if isinstance(r.get("abstract"), str) and len(r["abstract"]) > _ABSTRACT_IN_LIST:
+            r["abstract"] = r["abstract"][:_ABSTRACT_IN_LIST] + "…"
+    return results
 
 
 @mcp.tool()
@@ -301,8 +314,62 @@ def search_papers(
     For conceptual / synonym queries, prefer semantic_search_papers."""
     if not query or not query.strip():
         return json.dumps({"error": "Query must not be empty."})
-    results = search(query, papers, index, top_k=limit)
+    results = _trimmed(search(query, papers, index, top_k=limit), limit)
     return json.dumps(results, indent=2, ensure_ascii=False)
+
+
+# wide enough that a person with a few matching papers is not missed, narrow
+# enough that everyone who ever touched the topic is not "an expert"
+_EXPERT_PAPERS = 40
+_MIN_SIMILARITY = 0.35
+_LEXICAL_WEIGHT = 2.0
+
+
+@mcp.tool()
+def find_experts(
+    topic: Annotated[str, Field(description="What you need expertise in, e.g. 'battery cell testing'")],
+    limit: Annotated[int, Field(description="How many people to return (default 5)", ge=1, le=20)] = 5,
+) -> str:
+    """Who to talk to about a topic, judged by what they have published rather than by
+    how they describe themselves. Use this for 'who could help me with X' and 'who
+    should I collaborate with': a profile rarely names a method, but the papers do.
+    Prefer it over search_pis for a method or technique; use search_pis for a name."""
+    if not topic or not topic.strip():
+        return json.dumps({"error": "Topic must not be empty."})
+    scores: dict[str, float] = {}
+    # the ranked search pads its top-k with zero-score papers; a word match is
+    # evidence only when it actually matched
+    title_bm25, abstract_bm25 = index
+    tokens = topic.lower().split()
+    best = [max(t, a) for t, a in zip(title_bm25.get_scores(tokens), abstract_bm25.get_scores(tokens))]
+    ranked = sorted(range(len(best)), key=lambda i: -best[i])[:_EXPERT_PAPERS]
+    for i in ranked:
+        if best[i] > 0:
+            key = papers[i]["doi"].lower()
+            scores[key] = scores.get(key, 0.0) + _LEXICAL_WEIGHT
+    if semantic_search.is_available():
+        for hit in semantic_search.semantic_search(topic, papers_by_doi, top_k=_EXPERT_PAPERS):
+            score = float(hit.get("semantic_score") or 0)
+            if score >= _MIN_SIMILARITY:
+                key = hit["doi"].lower()
+                scores[key] = scores.get(key, 0.0) + score
+    if not scores:
+        return json.dumps({"error": f"Nothing in the corpus matches {topic!r}."})
+    found = []
+    for pi in _PIS:
+        theirs = [(doi, s) for doi, s in scores.items() if doi in set(_pi_dois(pi))]
+        if not theirs:
+            continue
+        theirs.sort(key=lambda pair: -pair[1])
+        found.append({**_pi_summary(pi), "matching_papers": len(theirs),
+                      "evidence": [{"doi": d, "title": (papers_by_doi.get(d) or {}).get("title")}
+                                   for d, _ in theirs[:3]],
+                      "_score": sum(s for _, s in theirs)})
+    found.sort(key=lambda person: -person["_score"])
+    for person in found:
+        del person["_score"]
+    return json.dumps({"count": len(found), "papers_considered": len(scores),
+                       "results": found[:limit]}, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -322,7 +389,7 @@ def semantic_search_papers(
         return json.dumps({
             "error": "Embeddings cache not built. Run: python src/build_embeddings_cache.py",
         })
-    results = semantic_search.semantic_search(query, papers_by_doi, top_k=limit)
+    results = _trimmed(semantic_search.semantic_search(query, papers_by_doi, top_k=limit), limit)
     return json.dumps(results, indent=2, ensure_ascii=False)
 
 
@@ -636,8 +703,10 @@ def joint_papers(
     found = _graph.joint_papers(pi_a, pi_b)
     if "error" not in found:
         dois = found.pop("dois", [])
-        found["papers"] = [_paper_brief(d) for d in dois if d in papers_by_doi]
-        found["not_in_corpus"] = [d for d in dois if d not in papers_by_doi]
+        held = [_paper_brief(d) for d in dois if d in papers_by_doi]
+        missing = [d for d in dois if d not in papers_by_doi]
+        found = {**found, "shared_total": found.pop("count"), "in_corpus": len(held),
+                 "papers": held, "not_in_corpus": missing}
     return json.dumps(found, indent=2, ensure_ascii=False)
 
 

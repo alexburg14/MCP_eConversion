@@ -57,5 +57,6 @@ def test_joint_papers_carry_titles_through_the_tool():
     import server
 
     out = json.loads(server.joint_papers("Eichhorn", "Sharp"))
-    assert out["count"] == len(out["papers"]) + len(out["not_in_corpus"])
+    assert out["shared_total"] == out["in_corpus"] + len(out["not_in_corpus"])
+    assert out["in_corpus"] == len(out["papers"])
     assert out["papers"] and out["papers"][0]["title"]

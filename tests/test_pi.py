@@ -69,3 +69,22 @@ def test_count_papers_sizes_many_topics_in_one_call():
 def test_pi_dois_lose_the_stray_brace():
     for pi in server._PIS:
         assert not any(d.endswith("}") for d in server._pi_dois(pi))
+
+
+def test_find_experts_answers_by_what_people_published():
+    out = json.loads(server.find_experts("battery lifetime prediction"))
+    assert out["count"] >= 1 and out["papers_considered"] >= 1
+    first = out["results"][0]
+    assert first["matching_papers"] >= 1 and first["evidence"][0]["doi"]
+    counts = [p["matching_papers"] for p in out["results"]]
+    assert all(p["evidence"][0]["title"] for p in out["results"])
+    assert len(counts) <= 5
+    assert "error" in json.loads(server.find_experts(""))
+
+
+def test_large_searches_carry_trimmed_abstracts():
+    wide = json.loads(server.search_papers("battery", limit=30))
+    assert len(wide) == 30
+    assert all(len(p.get("abstract") or "") <= server._ABSTRACT_IN_LIST + 1 for p in wide)
+    narrow = json.loads(server.search_papers("battery", limit=5))
+    assert any(len(p.get("abstract") or "") > server._ABSTRACT_IN_LIST for p in narrow)
