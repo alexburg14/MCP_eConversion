@@ -102,15 +102,81 @@ def test_tool_error_json_is_flagged_not_ok_and_previewed():
     assert events[-1]["tools"][0]["ok"] is False
 
 
-def test_round_limit_returns_the_limit_text_and_error():
-    rounds = [[tool_chunk(0, id=f"c{i}", name="search_papers", arguments="{}")]
+def test_round_limit_ends_with_an_answer_from_what_was_found():
+    """The budget is for searching: once spent, the model is asked once more
+    without tools, so the person gets an answer rather than a notice."""
+    rounds = [[tool_chunk(0, id=f"c{i}", name="search_papers", arguments=f'{{"q": {i}}}')]
               for i in range(agent.MAX_TOOL_ROUNDS)]
-    client = FakeOpenAI(rounds)
+    client = FakeOpenAI(rounds + [[text_chunk("From what I found: three things.")]])
     events, calls = run(client)
     done = events[-1]
     assert done["error"] == "tool_call_limit_reached"
-    assert done["answer"] == agent.LIMIT_REACHED_TEXT  # no round produced text
+    assert done["answer"] == "From what I found: three things."
     assert done["rounds"] == agent.MAX_TOOL_ROUNDS and len(calls) == agent.MAX_TOOL_ROUNDS
+    last = client.calls[-1]
+    assert last["tool_choice"] == "none" and last["tools"] == TOOLS
+    assert last["messages"][-1] == {"role": "user", "content": agent.ANSWER_NOW}
+    final_round = [e for e in events if e["type"] == "round"][-1]
+    assert final_round == {"type": "round", "round": agent.MAX_TOOL_ROUNDS + 1,
+                           "max": agent.MAX_TOOL_ROUNDS, "final": True}
+
+
+def test_round_limit_falls_back_to_the_notice_when_the_model_says_nothing():
+    client = FakeOpenAI([[tool_chunk(0, id="c", name="search_papers", arguments='{"q": 1}')], []])
+    events, _ = run(client, max_rounds=1)
+    assert events[-1]["error"] == "tool_call_limit_reached"
+    assert events[-1]["answer"] == agent.LIMIT_REACHED_TEXT
+
+
+def test_two_fruitless_rounds_end_the_search_early():
+    """Every call failing or repeating, twice in a row, is a model going in
+    circles: answer now rather than after every remaining round."""
+    client = FakeOpenAI([[tool_chunk(0, id="a", name="search_papers", arguments="{}")],
+                         [tool_chunk(0, id="b", name="search_papers", arguments="{}")],
+                         [text_chunk("I could not run the search; here is what I know.")]])
+    events, calls = run(client, call_tool=lambda n, a: json.dumps({"error": "query required"}))
+    assert events[-1]["error"] == "tool_calls_fruitless"
+    assert events[-1]["rounds"] == 2 and len(calls) == 1, "the repeat is answered, not run"
+    assert events[-1]["answer"].startswith("I could not run the search")
+    assert len(client.calls) == 3
+
+
+def test_a_repeated_call_is_answered_not_run_and_is_not_a_success():
+    same = '{"query": "x"}'
+    client = FakeOpenAI([[tool_chunk(0, id="c1", name="search_papers", arguments=same)],
+                         [tool_chunk(0, id="c2", name="search_papers", arguments=same)],
+                         [text_chunk("nothing found")]])
+    events, calls = run(client)
+    assert calls == [("search_papers", {"query": "x"})]
+    ends = [e for e in events if e["type"] == "tool_call_end"]
+    assert '"repeated": true' in ends[1]["preview"] and ends[1]["ok"] is False
+    assert events[-1]["answer"] == "nothing found"
+
+
+def test_a_repeated_failed_call_gets_its_error_again_not_a_result():
+    client = FakeOpenAI([[tool_chunk(0, id="a", name="search_papers", arguments="{}")],
+                         [tool_chunk(0, id="b", name="search_papers", arguments="{}"),
+                          tool_chunk(1, id="c", name="search_papers", arguments='{"query": "x"}')],
+                         [text_chunk("ok")]])
+    events, calls = run(client, call_tool=lambda n, a: json.dumps({"error": "'query' is required"}))
+    assert [a for _, a in calls] == [{}, {"query": "x"}]
+    repeat = next(m for m in client.calls[2]["messages"] if m.get("tool_call_id") == "b")
+    assert "'query' is required" in repeat["content"] and "have its result" not in repeat["content"]
+
+
+def test_tool_call_ids_are_unique_for_the_whole_turn():
+    """Some endpoints number their calls from zero in every round; the
+    interface matches results to calls by id, so a second 'call_0' would
+    attach to the first."""
+    client = FakeOpenAI([[tool_chunk(0, id="call_0", name="search_papers", arguments='{"q": 1}')],
+                         [tool_chunk(0, id="call_0", name="search_papers", arguments='{"q": 2}')],
+                         [text_chunk("ok")]])
+    events, _ = run(client)
+    starts = [e["id"] for e in events if e["type"] == "tool_call_start"]
+    ends = [e["id"] for e in events if e["type"] == "tool_call_end"]
+    assert starts == ends and len(set(starts)) == 2 and starts[0] == "call_0"
+    sent = client.calls[2]["messages"]
+    assert sent[-1]["tool_call_id"] == sent[-2]["tool_calls"][0]["id"] == starts[1]
 
 
 def test_create_exception_becomes_an_error_event_that_keeps_progress():
@@ -196,11 +262,14 @@ def test_reasoning_goes_to_its_own_channel_and_not_into_the_answer():
     assert events[-1]["answer"] == "Answer <b>"
 
 
-def test_text_before_a_tool_call_is_kept_in_the_final_answer():
+def test_text_before_a_tool_call_is_narration_not_the_answer():
+    """'Let me check.' streams so the interface shows progress, but the stored
+    answer is what the model says once it stops calling tools."""
     client = FakeOpenAI([[text_chunk("Let me check."), tool_chunk(0, id="c", name="search_papers", arguments="{}")],
                          [text_chunk("Found it.")]])
     events, _ = run(client)
-    assert events[-1]["answer"] == "Let me check.\n\nFound it."
+    assert events[-1]["answer"] == "Found it."
+    assert "".join(e["text"] for e in events if e["type"] == "text_delta") == "Let me check.Found it."
 
 
 def test_openrouter_extra_provider_goes_to_extra_body():

@@ -23,9 +23,14 @@ def test_search_is_deterministic():
     assert [r["doi"] for r in a] == [r["doi"] for r in b]
 
 
-def test_list_papers_requires_a_filter():
-    # No filter must error rather than dumping the whole corpus.
-    assert "error" in json.loads(server.list_papers())
+def test_list_papers_without_a_filter_lists_the_corpus_within_the_limit():
+    # Listing everything is bounded by the limit anyway; refusing it only sent
+    # the model in circles ("collaboration over time" asked eight times).
+    out = json.loads(server.list_papers(limit=3))
+    assert out["total_matches"] == len(server.papers)
+    assert out["returned"] == len(out["papers"]) == 3
+    years = [int(p["year"]) for p in out["papers"] if str(p["year"]).isdigit()]
+    assert years == sorted(years, reverse=True)
 
 
 def test_list_papers_filters_by_author_accent_insensitive():

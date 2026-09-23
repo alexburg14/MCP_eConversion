@@ -62,7 +62,8 @@ def test_normalize_rejects_unknown_key():
 def test_openrouter_gets_routing_and_privacy(cfg):
     extra = llm.build_extra(cfg, {}, "openrouter")
     assert extra["provider"] == {"sort": "price", "zdr": True, "data_collection": "deny",
-                                "max_price": {"prompt": 1.0, "completion": 1.0}}
+                                "max_price": {"prompt": 1.0, "completion": 1.0},
+                                "quantizations": ["fp8", "fp16", "bf16", "fp32", "unknown"]}
     assert "reasoning" not in extra                   # "" = not sent
 
 

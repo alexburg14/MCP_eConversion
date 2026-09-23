@@ -33,7 +33,15 @@ def _load() -> nx.Graph:
             f"{_GRAPH_PATH.name} not found. Run: python src/scripts/build_graph_cache.py"
         )
     with open(_GRAPH_PATH, encoding="utf-8") as f:
-        _graph = json_graph.node_link_graph(json.load(f), edges="links")
+        G = json_graph.node_link_graph(json.load(f), edges="links")
+    # A cache built from a pis cache with brace-suffixed DOIs lists every such
+    # paper twice on an edge and counts it twice in the weight.
+    for _, _, data in G.edges(data=True):
+        if "shared_dois" in data:
+            unique = list(dict.fromkeys(d.strip().lower().rstrip("} ") for d in data["shared_dois"]))
+            data["shared_dois"] = unique
+            data["weight"] = len(unique)
+    _graph = G
     return _graph
 
 
@@ -88,16 +96,27 @@ def joint_papers(pi_a: str, pi_b: str) -> dict:
     return {"pi_a": _node(G, na), "pi_b": _node(G, nb), "count": e["weight"], "dois": e["shared_dois"]}
 
 
-def collaboration_centrality(top_k: int = 10) -> list[dict]:
-    """PIs ranked by betweenness centrality — the 'bridges' between groups.
+RANKINGS = ("betweenness", "collaborators", "shared_papers")
 
-    Unweighted: a high score means a PI sits on many shortest paths between
-    otherwise weakly-connected groups, not simply that they publish a lot.
+
+def collaboration_centrality(top_k: int = 10, by: str = "betweenness") -> list[dict]:
+    """PIs ranked by betweenness centrality — the 'bridges' between groups — or
+    by how many distinct collaborators or shared papers they have.
+
+    Betweenness is unweighted: a high score means a PI sits on many shortest
+    paths between otherwise weakly-connected groups, not simply that they
+    publish a lot. Every entry carries all three numbers, so one call also
+    answers "most different partners" and "most joint papers".
     """
     G = _load()
     bc = nx.betweenness_centrality(G)
-    ranked = sorted(bc.items(), key=lambda kv: -kv[1])[:top_k]
-    return [{**_node(G, n), "betweenness": round(score, 4)} for n, score in ranked]
+    rows = [{**_node(G, n), "betweenness": round(bc[n], 4),
+             "collaborators": int(G.degree(n)),
+             "shared_papers": int(G.degree(n, weight="weight"))}
+            for n in G.nodes]
+    key = by if by in RANKINGS else "betweenness"
+    rows.sort(key=lambda r: (-r[key], r["name"]))
+    return rows[:top_k]
 
 
 def collaboration_communities() -> dict:

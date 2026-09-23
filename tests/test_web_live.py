@@ -79,7 +79,8 @@ def test_events_arrive_before_the_turn_finishes(live, harness):
             rest = list(lines)
         assert any(ln.startswith("event: done") for ln in rest)
         view = c.get("/api/session").json()
-        assert view["busy"] is False and view["messages"][-1]["content"] == "pre \n\npost"
+        # "pre " streamed as progress; the stored answer is what came after the tools
+        assert view["busy"] is False and view["messages"][-1]["content"] == "post"
 
 
 def test_a_second_prompt_displaces_a_turn_stuck_in_a_tool_call(live, harness, state):

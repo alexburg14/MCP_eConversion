@@ -126,7 +126,9 @@ def parse_profile(html: str) -> dict:
     pubs_idx = html.find('>Publications<')
     pub_html = html[pubs_idx:] if pubs_idx > 0 else html
     raw = re.findall(r'10\.\d{4,9}/[^\s"<>]+', pub_html)
-    dois = sorted({re.sub(r'[.,;)\]]+$', '', d).lower() for d in raw})
+    # the page wraps some DOIs in braces; a trailing one would make "10.x}" a
+    # second paper next to "10.x" and double every graph edge that carries it
+    dois = sorted({re.sub(r'[.,;)\]}]+$', '', d).lower() for d in raw})
 
     return {
         "research_focus": research_focus,

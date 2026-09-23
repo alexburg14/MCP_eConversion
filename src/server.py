@@ -179,6 +179,15 @@ def _score_pi(pi: dict, tokens: list[str]) -> int:
     return sum(1 for t in tokens if t in words)
 
 
+def _norm_doi(doi: str) -> str:
+    """Lowercase, without the stray brace the members page leaves on some DOIs."""
+    return doi.strip().lower().rstrip("} ")
+
+
+def _pi_dois(pi: dict) -> list[str]:
+    return list(dict.fromkeys(_norm_doi(d) for d in pi.get("publication_dois", []) if d))
+
+
 def _pi_summary(pi: dict) -> dict:
     return {
         "name": pi.get("name"),
@@ -186,9 +195,20 @@ def _pi_summary(pi: dict) -> dict:
         "institution": pi.get("institution"),
         "research_focus": pi.get("research_focus", []),
         "application_fields": pi.get("application_fields", []),
-        "publication_count": len(pi.get("publication_dois", [])),
+        "publication_count": len(_pi_dois(pi)),
         "profile_url": pi.get("profile_url"),
     }
+
+
+def _paper_brief(doi_key: str) -> dict:
+    """Title, year and authors of a paper the corpus holds, without the abstract."""
+    paper = papers_by_doi.get(doi_key) or {}
+    entry = {"doi": paper.get("doi", doi_key), "title": paper.get("title"),
+             "year": paper.get("year"), "authors": paper.get("authors")}
+    apply_cache(entry, doi_key)
+    entry.pop("abstract", None)
+    entry.pop("abstract_source", None)
+    return entry
 
 
 @mcp.tool()
@@ -265,37 +285,74 @@ def get_proposal_fulltext(
     }, indent=2, ensure_ascii=False)
 
 
+_Limit = Annotated[int, Field(description="How many papers to return (default 5, at most 50); "
+                                          "raise it for 'list all' questions", ge=1, le=50)]
+
+
 @mcp.tool()
 def search_papers(
     query: Annotated[str, Field(description="Keyword search query")],
+    limit: _Limit = 5,
 ) -> str:
     """Lexical (BM25) search over e-conversion cluster publications.
     Best for exact terminology, acronyms, author names, or any query where the
     user's words are likely to appear verbatim in the title or abstract.
-    Returns the top 5 matching papers with titles, authors, abstracts, and linked datasets.
+    Returns the top matching papers with titles, authors, abstracts, and linked datasets.
     For conceptual / synonym queries, prefer semantic_search_papers."""
-    results = search(query, papers, index)
+    if not query or not query.strip():
+        return json.dumps({"error": "Query must not be empty."})
+    results = search(query, papers, index, top_k=limit)
     return json.dumps(results, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
 def semantic_search_papers(
     query: Annotated[str, Field(description="Conceptual / semantic search query")],
+    limit: _Limit = 5,
 ) -> str:
     """Semantic (embedding) search over e-conversion cluster publications.
     Best for conceptual queries that may use different vocabulary than the
     abstracts — e.g. 'splitting water with sunlight' finding photocatalytic OER
     papers that never use those exact words. For exact terms (acronyms, formulas,
     author names) prefer search_papers; lexical match is usually stronger there.
-    Returns the top 5 matching papers ranked by cosine similarity."""
+    Returns the top matching papers ranked by cosine similarity."""
     if not query or not query.strip():
         return json.dumps({"error": "Query must not be empty."})
     if not semantic_search.is_available():
         return json.dumps({
             "error": "Embeddings cache not built. Run: python src/build_embeddings_cache.py",
         })
-    results = semantic_search.semantic_search(query, papers_by_doi)
+    results = semantic_search.semantic_search(query, papers_by_doi, top_k=limit)
     return json.dumps(results, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def count_papers(
+    topics: Annotated[list[str], Field(description="Topics to size, each a few words that must all appear",
+                                       min_length=1, max_length=30)],
+) -> str:
+    """How many papers mention each topic, in title or abstract and anywhere in the
+    full text, without returning the papers. One call sizes many topics at once —
+    for 'how well covered is X' and 'which of these topics have few papers' — where
+    a search per topic would cost a round each. Search only the ones worth reading."""
+    _FULLTEXTS_READY.wait(timeout=60)
+    folded = {}
+    for paper in papers:
+        doi_key = paper["doi"].lower()
+        abstract = (_ABSTRACTS.get(doi_key) or {}).get("abstract", "")
+        folded[doi_key] = _fold(f"{paper.get('title', '')} {abstract}")
+    lowered = {doi: (entry.get("fulltext") or "").lower() for doi, entry in _FULLTEXTS.items()}
+    counts: dict = {}
+    for topic in topics:
+        tokens = _query_tokens(topic, min_len=2)
+        if not tokens:
+            counts[topic] = {"error": "Give a word of two letters or more."}
+            continue
+        counts[topic] = {
+            "title_or_abstract": sum(1 for t in folded.values() if all(w in t for w in tokens)),
+            "full_text": sum(1 for t in lowered.values() if all(w in t for w in tokens)),
+        }
+    return json.dumps({"papers": len(papers), "counts": counts}, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -331,13 +388,13 @@ def list_papers(
     the top 5), this returns EVERY paper matching the filters — use it for exhaustive
     listings: 'all papers by Rinke', 'papers in Nature', 'what did the cluster publish in 2022'.
     Filters are optional and combine with AND; author and journal are accent-insensitive
-    substring matches, year is exact. At least one filter is required.
-    Returns up to `limit` papers (default 50) plus the total match count."""
+    substring matches, year is exact. Without a filter it lists the whole corpus, newest
+    first, up to `limit`; total_matches is always the full number.
+    Returns up to `limit` papers (default 50, at most 200) plus the total match count."""
     author_q = _fold(str(author).strip())
     journal_q = _fold(str(journal).strip())
     year_q = str(year).strip()
-    if not (author_q or journal_q or year_q):
-        return json.dumps({"error": "Provide at least one filter: author, year, or journal."})
+    limit = max(1, min(int(limit), 200))
 
     matches = []
     for paper in papers:
@@ -457,13 +514,13 @@ def get_pi(
         "application_fields": best.get("application_fields", []),
     }
 
-    dois = best.get("publication_dois", [])
+    dois = _pi_dois(best)
     result["publication_count"] = len(dois)
 
     # Attach up to 10 papers from the abstract cache
     cached_papers = []
     for doi in dois:
-        doi_key = doi.lower()
+        doi_key = doi
         paper = papers_by_doi.get(doi_key)
         abstract_entry = _ABSTRACTS.get(doi_key)
         if paper or abstract_entry:
@@ -485,6 +542,49 @@ def get_pi(
     result["publications_in_cache"] = len(cached_papers)
     result["publications"] = cached_papers
     return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def list_pis() -> str:
+    """Every PI at once: name, group, institution, research focus, application fields
+    and how many of their papers the corpus holds. One call answers questions about all
+    the groups together — which groups name a topic, what the group descriptions cover,
+    how the cluster is composed. Counting groups from searches instead misses some."""
+    people = []
+    for pi in _PIS:
+        dois = _pi_dois(pi)
+        people.append({**_pi_summary(pi),
+                       "papers_in_corpus": sum(1 for d in dois if d in papers_by_doi)})
+    return json.dumps({"count": len(people), "results": people}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def most_collaborative_papers(
+    limit: Annotated[int, Field(description="How many papers to return (default 10)", ge=1, le=50)] = 10,
+) -> str:
+    """The papers with the most e-conversion PIs among their authors, most first, each
+    with the names of those PIs — the direct answer to 'which paper joins the most
+    groups'; no search can rank papers this way. by_year counts, per year, the papers
+    attributed to at least one PI and those shared by two or more, which is how
+    collaboration within the cluster over time is measured."""
+    holders: dict[str, list[str]] = {}
+    for pi in _PIS:
+        for doi in _pi_dois(pi):
+            if doi in papers_by_doi:
+                holders.setdefault(doi, []).append(pi.get("name", ""))
+    ranked = sorted(holders.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    by_year: dict[str, dict[str, int]] = {}
+    for doi, names in holders.items():
+        year = str(papers_by_doi[doi].get("year") or "unknown")
+        entry = by_year.setdefault(year, {"papers": 0, "shared_by_several": 0})
+        entry["papers"] += 1
+        entry["shared_by_several"] += len(names) > 1
+    return json.dumps({
+        "papers_with_a_pi": len(holders),
+        "by_year": dict(sorted(by_year.items())),
+        "results": [{**_paper_brief(doi), "pi_count": len(names), "pis": names}
+                    for doi, names in ranked[:limit]],
+    }, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -528,24 +628,36 @@ def joint_papers(
     pi_a: Annotated[str, Field(description="First PI last name or full name")],
     pi_b: Annotated[str, Field(description="Second PI last name or full name")],
 ) -> str:
-    """Return the DOIs of papers co-authored by two named PIs.
-    Returns an empty list if the two PIs have never co-published.
+    """Return the papers co-authored by two named PIs: title, year and DOI for each one
+    the corpus holds, and the DOIs of any it does not. Empty if they never co-published.
     Accepts last name or full name for each PI."""
     if not _graph.is_available():
         return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
-    return json.dumps(_graph.joint_papers(pi_a, pi_b), indent=2, ensure_ascii=False)
+    found = _graph.joint_papers(pi_a, pi_b)
+    if "error" not in found:
+        dois = found.pop("dois", [])
+        found["papers"] = [_paper_brief(d) for d in dois if d in papers_by_doi]
+        found["not_in_corpus"] = [d for d in dois if d not in papers_by_doi]
+    return json.dumps(found, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
 def collaboration_centrality(
-    top_k: Annotated[int, Field(description="How many top PIs to return (default 10)")] = 10,
+    top_k: Annotated[int, Field(description="How many top PIs to return (default 10)", ge=1, le=42)] = 10,
+    by: Annotated[str, Field(description="betweenness: who bridges otherwise separate groups; "
+                                         "collaborators: who has co-authored with the most different PIs; "
+                                         "shared_papers: who has the most co-authored papers in total")] = "betweenness",
 ) -> str:
-    """Return PIs ranked by betweenness centrality in the co-authorship graph.
-    High centrality = a PI bridges otherwise-separate research groups.
-    Use for 'who are the connectors / bridges in the cluster?' questions."""
+    """The PIs at the centre of the co-authorship network, ranked as asked. Every entry
+    carries all three numbers: betweenness (a high score means a PI bridges otherwise
+    separate groups, not that they publish a lot), the number of distinct
+    collaborators, and the total of shared papers."""
     if not _graph.is_available():
         return json.dumps({"error": "Collaboration graph not built. Run: python src/scripts/build_graph_cache.py"})
-    return json.dumps(_graph.collaboration_centrality(top_k), indent=2, ensure_ascii=False)
+    if by not in _graph.RANKINGS:
+        return json.dumps({"error": f"by must be one of {', '.join(_graph.RANKINGS)}."})
+    return json.dumps({"ranked_by": by, "results": _graph.collaboration_centrality(top_k, by)},
+                      indent=2, ensure_ascii=False)
 
 
 @mcp.tool()

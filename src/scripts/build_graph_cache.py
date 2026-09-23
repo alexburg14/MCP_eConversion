@@ -20,7 +20,9 @@ OUTPUT = DATA_DIR / "cache" / "collaboration_graph.json"
 
 
 def _doi_set(pi: dict) -> set:
-    return {d.strip().lower() for d in (pi.get("publication_dois") or []) if d and d.strip()}
+    # older pis caches carry some DOIs twice, once with a stray trailing brace
+    return {d.strip().lower().rstrip("} ") for d in (pi.get("publication_dois") or [])
+            if d and d.strip("} ")}
 
 
 def main():

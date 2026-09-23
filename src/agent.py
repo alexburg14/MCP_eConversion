@@ -11,7 +11,7 @@ networkx) and the remote MCP bridge drives its own event loop via
 
 Events (``{"type": ..., ...}``):
 
-    round               {round, max}
+    round               {round, max[, final]}
     text_delta          {text}                      answer text fragment
     reasoning_delta     {text}                      model "thinking" (never stored)
     tool_call_start     {id, name, args, round}
@@ -20,9 +20,15 @@ Events (``{"type": ..., ...}``):
     error               same fields as done plus {message, error_type}
 
 Exactly one of ``done`` / ``error`` is the last event. ``done.error`` is None,
-``tool_call_limit_reached`` or ``cancelled``; ``error`` carries an exception
-(upstream failure, bad request) together with the rounds and tool calls that
-had already run, so the caller can still account for them.
+``tool_call_limit_reached``, ``tool_calls_fruitless`` or ``cancelled``;
+``error`` carries an exception (upstream failure, bad request) together with
+the rounds and tool calls that had already run, so the caller can still
+account for them.
+
+The tool budget is a budget for searching, not for answering: when it is spent,
+or when two rounds in a row produced nothing new, the model is asked once more
+without tools to answer from what it has, so the person gets an answer built on
+the evidence gathered rather than a note that the limit was hit.
 """
 from __future__ import annotations
 
@@ -45,6 +51,17 @@ MAX_TOOL_ROUNDS = 10
 # 2048 truncated those mid-list.
 MAX_TOKENS = 8192
 LIMIT_REACHED_TEXT = "Tool-call limit reached without a final answer — try rephrasing the question."
+REPEATED_NOTE = ("You already made this exact call earlier in this answer and have its result. "
+                 "Use it, search for something different, or answer with what you have.")
+FAILED_AGAIN_NOTE = ("This exact call already failed earlier in this answer with the same error. "
+                     "Change the arguments or use a different tool.")
+ANSWER_NOW = ("You have used the tool calls available for this answer. Do not call any more "
+              "tools. Answer the question now from the results you already have, cite what "
+              "you found, and say plainly what you could not find out.")
+# rounds in a row in which every call failed or repeated an earlier one
+FRUITLESS_ROUNDS = 2
+LIMIT_REACHED_ERROR = "tool_call_limit_reached"
+FRUITLESS_ERROR = "tool_calls_fruitless"
 RESULT_PREVIEW_CHARS = 200
 _ARGS_LOG_CHARS = 80
 
@@ -172,11 +189,24 @@ class _Progress:
         self.tool_meta: list[dict] = []
         self.usage = {"prompt": 0, "completion": 0, "total": 0}
         self.rounds = 0
+        # what the model said before each tool call: narration, not the answer
         self.round_texts: list[str] = []
         self.start = time.perf_counter()
 
-    def answer_so_far(self, partial: str = "") -> str:
-        return "\n\n".join(t for t in [*self.round_texts, partial] if t)
+    def answer_so_far(self, final: str = "") -> str:
+        """The answer is what the model says once it stops calling tools. The
+        text between tool calls ("let me check...") is used only when nothing
+        else ever came, so a cut-off turn still shows what it had."""
+        return final or "\n\n".join(t for t in self.round_texts if t)
+
+
+class _Round:
+    """What one model call produced, filled while its events stream out."""
+
+    def __init__(self) -> None:
+        self.text = ""
+        self.calls: dict[int, dict] = {}
+        self.cancelled = False
 
 
 def run_turn(client: Any, model: str, messages: list[dict], *, system_prompt: str,
@@ -221,6 +251,21 @@ def friendly_error(exc: Exception) -> str:
     return text[:300]
 
 
+def _arguments(raw: str) -> dict:
+    try:
+        args = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
+def _error_of(result: str) -> str:
+    try:
+        return str(json.loads(result).get("error", result))[:300]
+    except (json.JSONDecodeError, AttributeError):
+        return result[:300]
+
+
 def _run_rounds(client: Any, model: str, messages: list[dict], system_prompt: str,
                 tools: list[dict], call_tool: Callable[[str, dict], str], extra: dict | None,
                 cancel: threading.Event | None, base_url: str, p: _Progress,
@@ -239,13 +284,22 @@ def _run_rounds(client: Any, model: str, messages: list[dict], system_prompt: st
         kwargs.update(rest)
 
     tool_log, tool_meta, usage, start = p.tool_log, p.tool_meta, p.usage, p.start
-    # Text the user has seen so far, one entry per round: the stored answer must
-    # match what was streamed, including any preamble before a tool call.
-    round_texts = p.round_texts
     answer_so_far = p.answer_so_far
 
     def cancelled() -> bool:
         return cancel is not None and cancel.is_set()
+
+    # A model that repeats a call it already made would keep doing it until the
+    # round limit. A repeat is answered rather than run: a successful call with
+    # a note that its result is already there, a failed one with its error
+    # again, so the model is never told it has a result it does not have.
+    outcomes: dict[tuple[str, str], str | None] = {}
+    # Some endpoints number their calls from zero in every round. The ids pair
+    # each result with its call, in the conversation and in the interface, so
+    # they have to be unique for the whole turn.
+    used_ids: set[str] = set()
+    fruitless = 0
+    why_final: str | None = None
 
     for round_num in range(max_rounds):
         rounds = p.rounds = round_num + 1
@@ -253,98 +307,139 @@ def _run_rounds(client: Any, model: str, messages: list[dict], system_prompt: st
             yield _done(answer_so_far(), start, rounds - 1, usage, tool_log, tool_meta, "cancelled")
             return
         yield {"type": "round", "round": rounds, "max": max_rounds}
-        call_start = time.perf_counter()
-        stream = _create_stream(client, model, msgs, kwargs, extra_body, base_url)
-        text_parts: list[str] = []
-        acc: dict[int, dict] = {}
-        splitter = _ThinkSplitter()
-        try:
-            for chunk in stream:
-                if cancelled():
-                    yield _done(answer_so_far("".join(text_parts)), start, rounds, usage,
-                                tool_log, tool_meta, "cancelled")
-                    return
-                _add_usage(usage, getattr(chunk, "usage", None))
-                if not getattr(chunk, "choices", None):
-                    continue
-                delta = chunk.choices[0].delta
-                if delta is None:
-                    continue
-                reasoning = (getattr(delta, "reasoning_content", None)
-                             or getattr(delta, "reasoning", None))
-                if reasoning:
-                    yield {"type": "reasoning_delta", "text": reasoning}
-                content = getattr(delta, "content", None)
-                if content:
-                    for kind, piece in splitter.feed(content):
-                        if kind == "text":
-                            text_parts.append(piece)
-                            yield {"type": "text_delta", "text": piece}
-                        else:
-                            yield {"type": "reasoning_delta", "text": piece}
-                for tc in getattr(delta, "tool_calls", None) or []:
-                    _accumulate_tool_delta(acc, tc)
-            for kind, piece in splitter.flush():
-                if kind == "text":
-                    text_parts.append(piece)
-                    yield {"type": "text_delta", "text": piece}
-                else:
-                    yield {"type": "reasoning_delta", "text": piece}
-        finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
-        log.info("llm_call", extra={"fields": {
-            "model": model, "round": round_num,
-            "duration_s": round(time.perf_counter() - call_start, 3),
-        }})
-
-        content = "".join(text_parts)
-        round_texts.append(content)
-        if not acc:
+        result = _Round()
+        yield from _one_round(client, model, msgs, kwargs, extra_body, base_url, cancelled,
+                              usage, p, result)
+        if result.cancelled:
+            yield _done(answer_so_far(result.text), start, rounds, usage, tool_log, tool_meta,
+                        "cancelled")
+            return
+        if not result.calls:
             log.info("answer_complete", extra={"fields": {
                 "model": model, "rounds": rounds,
                 "duration_s": round(time.perf_counter() - start, 3),
             }})
-            yield _done(answer_so_far(), start, rounds, usage, tool_log, tool_meta, None)
+            yield _done(answer_so_far(result.text), start, rounds, usage, tool_log, tool_meta, None)
             return
+        p.round_texts.append(result.text)
 
-        calls = [acc[i] for i in sorted(acc)]
+        calls = [result.calls[i] for i in sorted(result.calls)]
         for i, c in enumerate(calls):
-            if not c["id"]:
+            if not c["id"] or c["id"] in used_ids:
                 c["id"] = f"call_{rounds}_{i}"
+            used_ids.add(c["id"])
         msgs.append({
             "role": "assistant",
-            "content": content or None,
+            "content": result.text or None,
             "tool_calls": [
                 {"id": c["id"], "type": "function",
                  "function": {"name": c["name"], "arguments": c["arguments"]}}
                 for c in calls
             ],
         })
+        useful = 0
         for c in calls:
             if cancelled():
                 yield _done(answer_so_far(), start, rounds, usage, tool_log, tool_meta, "cancelled")
                 return
-            try:
-                args = json.loads(c["arguments"] or "{}")
-                if not isinstance(args, dict):
-                    args = {}
-            except json.JSONDecodeError:
-                args = {}
+            args = _arguments(c["arguments"])
             yield {"type": "tool_call_start", "id": c["id"], "name": c["name"],
                    "args": args, "round": rounds}
             t0 = time.perf_counter()
-            result = call_tool(c["name"], args)
-            if not isinstance(result, str):
-                result = json.dumps(result, ensure_ascii=False)
+            signature = (c["name"], json.dumps(args, sort_keys=True))
+            if signature in outcomes:
+                earlier = outcomes[signature]
+                result_text = json.dumps(
+                    {"repeated": True, "note": REPEATED_NOTE} if earlier is None
+                    else {"repeated": True, "error": earlier, "note": FAILED_AGAIN_NOTE})
+                ok = False
+            else:
+                result_text = call_tool(c["name"], args)
+                if not isinstance(result_text, str):
+                    result_text = json.dumps(result_text, ensure_ascii=False)
+                ok = not result_text.lstrip().startswith('{"error"')
+                outcomes[signature] = None if ok else _error_of(result_text)
+                useful += ok
             ms = (time.perf_counter() - t0) * 1000
-            ok = not result.lstrip().startswith('{"error"')
             tool_meta.append(telemetry.tool_call_meta(c["name"], args, ms, ok))
             tool_log.append(f"`{c['name']}({c['arguments'][:_ARGS_LOG_CHARS]})`")
             yield {"type": "tool_call_end", "id": c["id"], "name": c["name"], "ok": ok,
-                   "ms": round(ms), "preview": result[:RESULT_PREVIEW_CHARS]}
-            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+                   "ms": round(ms), "preview": result_text[:RESULT_PREVIEW_CHARS]}
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": result_text})
 
-    yield _done(answer_so_far(LIMIT_REACHED_TEXT), start, rounds, usage, tool_log, tool_meta,
-                "tool_call_limit_reached")
+        fruitless = 0 if useful else fruitless + 1
+        if fruitless >= FRUITLESS_ROUNDS:
+            why_final = FRUITLESS_ERROR
+            break
+    else:
+        why_final = LIMIT_REACHED_ERROR
+
+    log.info("answering without tools", extra={"fields": {
+        "model": model, "reason": why_final, "rounds": p.rounds}})
+    if cancelled():
+        yield _done(answer_so_far(), start, p.rounds, usage, tool_log, tool_meta, "cancelled")
+        return
+    yield {"type": "round", "round": p.rounds + 1, "max": max_rounds, "final": True}
+    msgs.append({"role": "user", "content": ANSWER_NOW})
+    result = _Round()
+    yield from _one_round(client, model, msgs, {**kwargs, "tool_choice": "none"}, extra_body,
+                          base_url, cancelled, usage, p, result)
+    if result.cancelled:
+        yield _done(answer_so_far(result.text), start, p.rounds, usage, tool_log, tool_meta,
+                    "cancelled")
+        return
+    yield _done(answer_so_far(result.text) or LIMIT_REACHED_TEXT, start, p.rounds, usage,
+                tool_log, tool_meta, why_final)
+
+
+def _one_round(client: Any, model: str, msgs: list[dict], kwargs: dict, extra_body: dict | None,
+               base_url: str, cancelled: Callable[[], bool], usage: dict, p: _Progress,
+               out: _Round) -> Iterator[dict]:
+    """One model call, streamed. Text deltas go out as they arrive; the text
+    and the tool calls it asked for are left in ``out``."""
+    call_start = time.perf_counter()
+    stream = _create_stream(client, model, msgs, kwargs, extra_body, base_url)
+    text_parts: list[str] = []
+    splitter = _ThinkSplitter()
+    try:
+        for chunk in stream:
+            if cancelled():
+                out.text = "".join(text_parts)
+                out.cancelled = True
+                return
+            _add_usage(usage, getattr(chunk, "usage", None))
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            reasoning = (getattr(delta, "reasoning_content", None)
+                         or getattr(delta, "reasoning", None))
+            if reasoning:
+                yield {"type": "reasoning_delta", "text": reasoning}
+            content = getattr(delta, "content", None)
+            if content:
+                for kind, piece in splitter.feed(content):
+                    if kind == "text":
+                        text_parts.append(piece)
+                        yield {"type": "text_delta", "text": piece}
+                    else:
+                        yield {"type": "reasoning_delta", "text": piece}
+            for tc in getattr(delta, "tool_calls", None) or []:
+                _accumulate_tool_delta(out.calls, tc)
+        for kind, piece in splitter.flush():
+            if kind == "text":
+                text_parts.append(piece)
+                yield {"type": "text_delta", "text": piece}
+            else:
+                yield {"type": "reasoning_delta", "text": piece}
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+    out.text = "".join(text_parts)
+    log.info("llm_call", extra={"fields": {
+        "model": model, "round": p.rounds,
+        "duration_s": round(time.perf_counter() - call_start, 3),
+        "tool_calls": len(out.calls),
+    }})

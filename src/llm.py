@@ -42,6 +42,11 @@ def route_label(value: str) -> str:
 # and cost under 1 EUR / M tokens (prompt AND completion). Falls back to the
 # static config list if the fetch fails or no key is configured.
 OPENROUTER_MAX_PRICE_PER_MTOK = 1.0  # EUR-equivalent cap (approx. USD 1.0)
+# The cheapest upstream of a model is not always a working one: measured on
+# 2026-09-23, the fp4 endpoint that "price" routing picked returned tool calls
+# with their arguments dropped, which sent the model in circles until the
+# round limit. Everything fp8 and up (or of undeclared quantization) was fine.
+OPENROUTER_QUANTIZATIONS = ("fp8", "fp16", "bf16", "fp32", "unknown")
 _PRICE_PER_TOKEN_CAP = OPENROUTER_MAX_PRICE_PER_MTOK / 1_000_000
 _MIN_AGENTIC_INDEX = 35.0
 
@@ -294,7 +299,8 @@ def build_extra(cfg: Config, params: dict[str, Any] | None, provider_name: str |
     extra["provider"] = {"sort": effective["provider_sort"], "zdr": True,
                          "data_collection": "deny",
                          "max_price": {"prompt": OPENROUTER_MAX_PRICE_PER_MTOK,
-                                       "completion": OPENROUTER_MAX_PRICE_PER_MTOK}}
+                                       "completion": OPENROUTER_MAX_PRICE_PER_MTOK},
+                         "quantizations": list(OPENROUTER_QUANTIZATIONS)}
     if effective["reasoning_effort"]:
         extra["reasoning"] = {"effort": effective["reasoning_effort"]}
     return extra

@@ -36,7 +36,7 @@ def test_call_tool_applies_defaults_for_omitted_optionals():
     # collaboration_centrality(top_k=10) — omitting top_k must use the default,
     # not raise, now that dispatch is fn(**args).
     out = json.loads(openai_tools.call_tool("collaboration_centrality", {}))
-    assert isinstance(out, list) and len(out) >= 1
+    assert out["ranked_by"] == "betweenness" and len(out["results"]) >= 1
 
 
 def test_server_status_reports_all_caches():
