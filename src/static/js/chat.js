@@ -188,7 +188,8 @@ class AssistantMessage {
     // live steps stay; the summary line mirrors the stored history entry
     this.summary(data.tool_calls || [], data.elapsed);
     if (data.error === "cancelled") this.note("Stopped.", "info");
-    else if (data.error === "tool_call_limit_reached") this.note("Tool-call limit reached.", "info");
+    else if (data.error === "tool_call_limit_reached") this.note("Tool-call limit reached; answered from what was found.", "info");
+    else if (data.error === "tool_calls_fruitless") this.note("Searching stopped early: the last tool calls returned nothing new.", "info");
   }
 
   note(text, kind = "") {
