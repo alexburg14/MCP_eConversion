@@ -30,11 +30,13 @@ export const del = (path) => fetch(path, { method: "DELETE", headers: { accept: 
  * POST the prompt and consume the SSE response incrementally.
  * onEvent(type, data) is called per frame; resolves when the stream ends.
  */
-export async function streamChat(prompt, { signal, onEvent }) {
+export async function streamChat(prompt, { signal, onEvent, editAt, editExpected }) {
+  const body = { prompt };
+  if (editAt != null) { body.edit_at = editAt; body.edit_expected = editExpected; }
   const res = await fetch("api/chat", {
     method: "POST", signal,
     headers: { "content-type": "application/json", accept: "text/event-stream" },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) await parse(res); // throws ApiError with the server's message
   const reader = res.body.getReader();

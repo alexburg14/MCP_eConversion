@@ -211,6 +211,11 @@ class AppState:
 
 class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS)
+    # Edit-and-resend / Retry: replace the message at edit_at (and drop everything
+    # after it) instead of appending. edit_expected guards against a stale index
+    # (e.g. a displaced turn inserted rows since the client last synced).
+    edit_at: int | None = Field(default=None, ge=0)
+    edit_expected: str | None = Field(default=None, max_length=MAX_PROMPT_CHARS)
 
 
 class ModelRequest(BaseModel):
@@ -649,6 +654,16 @@ def create_app(state: AppState | None = None, root_path: str | None = None) -> F
         prompt = req.prompt.strip()
         if not prompt:
             return JSONResponse({"error": "Empty prompt."}, status_code=400)
+        if req.edit_at is not None:
+            with session.lock:
+                convo = session.messages
+                target = convo[req.edit_at] if req.edit_at < len(convo) else None
+                if (target is None or target.get("role") != "user"
+                        or target.get("content") != (req.edit_expected or "")):
+                    return JSONResponse(
+                        {"error": "This conversation changed since you loaded it — reload and try again."},
+                        status_code=409)
+                del convo[req.edit_at:]
         resolved = await run_in_threadpool(
             llm.resolve_llm, state.cfg, session.provider_name, session.model_name,
             dict(session.llm_params))

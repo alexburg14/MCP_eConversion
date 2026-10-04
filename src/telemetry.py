@@ -145,9 +145,18 @@ def turn_record(*, session, turn, provider, model, base_url, tools_available,
 
 
 def log_turn(**kwargs) -> dict:
-    """Emit one ``assistant.chat`` line and return the record (for the UI)."""
+    """Emit one ``assistant.chat`` line and return the record (for the UI).
+
+    ERROR-level when the turn actually failed (an exception, or the tool-call
+    limit), so it shows up when filtering the log by severity -- every turn
+    was previously logged at INFO regardless of outcome. "cancelled" is a user
+    action (they hit stop), not a failure, so it stays at INFO. Only the
+    already-privacy-safe fields (error_type, hashes, lengths -- never the raw
+    prompt/answer/exception text) go into the record either way.
+    """
     record = turn_record(**kwargs)
-    log.info("chat turn", extra={"fields": record})
+    level = log.error if record.get("error") and record["error"] != "cancelled" else log.info
+    level("chat turn", extra={"fields": record})
     return record
 
 

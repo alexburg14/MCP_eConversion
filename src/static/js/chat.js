@@ -45,10 +45,28 @@ function copyButton(getText) {
   return b;
 }
 
+function retryButton(onClick) {
+  const b = el("button", "icon-btn retry-btn");
+  b.type = "button";
+  b.title = "Retry this answer";
+  b.append(svgUse("i-retry"));
+  b.addEventListener("click", onClick);
+  return b;
+}
+
 /** One assistant message: steps above, markdown body, footer with summary + copy. */
 class AssistantMessage {
-  constructor(list) {
+  constructor(list, opts = {}) {
+    // The user message (index + text) this answer replies to -- what a Retry
+    // resubmits, and the index the server truncates the conversation to.
+    this.precedingUserIdx = opts.precedingUserIdx ?? null;
+    this.precedingUserText = opts.precedingUserText ?? "";
+    this.onRetry = opts.onRetry ?? null;
+    this.retryAdded = false;
     this.root = el("div", "msg assistant");
+    // One past the preceding user message -- matches where the server files the
+    // answer (convo.insert(at + 1, ...)), so a truncate-from-idx removes this too.
+    if (this.precedingUserIdx != null) this.root.dataset.idx = this.precedingUserIdx + 1;
     // Perplexity-style: the "Researched …" line sits above the answer
     this.head = el("details", "researched live empty");
     this.headSummary = el("summary");
@@ -75,8 +93,8 @@ class AssistantMessage {
     this.toolCount = 0;
   }
 
-  static fromHistory(list, msg) {
-    const a = new AssistantMessage(list);
+  static fromHistory(list, msg, opts) {
+    const a = new AssistantMessage(list, opts);
     a.renderer.finish(msg.content || "");
     a.text = msg.content || "";
     const meta = msg.meta || {};
@@ -179,6 +197,15 @@ class AssistantMessage {
     // Skip it if the user already toggled this dropdown themselves; their choice sticks.
     if (!this.userToggled) this.head.open = false;
     if (this.text) this.foot.append(copyButton(() => this.text));
+    this.addRetryButton();
+  }
+
+  // Available even on an empty/errored answer -- that's the main reason to
+  // retry. Guarded so done()'s summary() and a later note() don't double-add it.
+  addRetryButton() {
+    if (this.retryAdded || !this.onRetry || this.precedingUserIdx == null) return;
+    this.retryAdded = true;
+    this.foot.append(retryButton(() => this.onRetry(this.precedingUserIdx, this.precedingUserText)));
   }
 
   done(data) {
@@ -202,6 +229,7 @@ class AssistantMessage {
     this.head.classList.remove("live");
     this.renderer.finish();
     this.bubble.append(el("div", "note " + kind, text));
+    this.addRetryButton();
   }
 }
 
@@ -271,19 +299,62 @@ export function chatView(store) {
         list.append(e);
       }
 
-      function appendUser(text) {
+      // idx is this message's position in store.session.messages -- how an edit
+      // knows what to truncate, both server-side (edit_at) and in this DOM (below).
+      function appendUser(text, idx) {
         const m = el("div", "msg user");
-        m.append(el("div", "bubble", text));
+        m.dataset.idx = idx;
+        const bubble = el("div", "bubble", text);
+        const editBtn = el("button", "icon-btn edit-btn");
+        editBtn.type = "button";
+        editBtn.title = "Edit and resend";
+        editBtn.append(svgUse("i-edit"));
+        editBtn.addEventListener("click", () => startEditUser(m, idx, text));
+        m.append(bubble, editBtn);
         list.append(m);
+        return m;
+      }
+
+      function startEditUser(m, idx, originalText) {
+        if (store.streaming) return;
+        const ta2 = el("textarea", "edit-textarea");
+        ta2.value = originalText;
+        const actions = el("div", "edit-actions");
+        const cancel = el("button", "btn ghost", "Cancel");
+        const save = el("button", "btn primary", "Save & resend");
+        cancel.type = "button"; save.type = "button";
+        cancel.addEventListener("click", () => renderHistory()); // discards the edit, nothing was sent
+        save.addEventListener("click", () => {
+          const newText = ta2.value.trim();
+          if (newText) submit(newText, { editAt: idx, editExpected: originalText });
+        });
+        actions.append(cancel, save);
+        m.replaceChildren(ta2, actions);
+        ta2.focus();
+      }
+
+      // Removes the message being edited/retried and everything after it from
+      // the DOM, mirroring the server's `del session.messages[edit_at:]`.
+      function truncateFrom(idx) {
+        for (const child of [...list.children]) {
+          if (child.classList.contains("msg") && Number(child.dataset.idx) >= idx) child.remove();
+        }
+      }
+
+      async function retry(idx, text) {
+        if (store.streaming || idx == null) return;
+        await submit(text, { editAt: idx, editExpected: text });
       }
 
       function renderHistory() {
         list.replaceChildren();
         const msgs = store.session?.messages || [];
         if (!msgs.length) renderEmpty();
-        for (const m of msgs) {
-          if (m.role === "user") appendUser(m.content);
-          else AssistantMessage.fromHistory(list, m);
+        let lastUserIdx = null, lastUserText = "";
+        for (let i = 0; i < msgs.length; i++) {
+          const m = msgs[i];
+          if (m.role === "user") { appendUser(m.content, i); lastUserIdx = i; lastUserText = m.content; }
+          else AssistantMessage.fromHistory(list, m, { precedingUserIdx: lastUserIdx, precedingUserText: lastUserText, onRetry: retry });
         }
         renderedCount = msgs.length;
         if (store.streaming) list.append(el("div", "note info", "A response is still being generated…"));
@@ -294,6 +365,8 @@ export function chatView(store) {
         send.classList.toggle("stop", streaming);
         send.title = streaming ? "Stop generating" : "Send (Enter)";
         ta.disabled = streaming;
+        // Dims the edit/retry buttons (see app.css) -- editing history mid-stream isn't supported.
+        document.body.classList.toggle("streaming", streaming);
       }
 
       function grow() {
@@ -301,17 +374,22 @@ export function chatView(store) {
         ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
       }
 
-      async function submit(text) {
+      // editInfo = { editAt, editExpected } to replace an earlier user message
+      // (and drop everything after it) instead of appending a new one; used by
+      // both the edit-and-resend flow and Retry (retry = edit with the same text).
+      async function submit(text, editInfo = null) {
         text = (text || "").trim();
         if (!text || store.streaming) return;
         if (!store.session.messages.length && !list.querySelector(".msg")) list.replaceChildren();
         ta.value = ""; grow();
-        appendUser(text);
+        const idx = editInfo ? editInfo.editAt : (store.session?.messages?.length ?? 0);
+        if (editInfo) truncateFrom(idx);
+        appendUser(text, idx);
         autoScroll = true;
-        const a = new AssistantMessage(list);
+        const a = new AssistantMessage(list, { precedingUserIdx: idx, precedingUserText: text, onRetry: retry });
         // the server will hold these two messages after the turn; keep the live
         // DOM (with its tool steps) instead of re-rendering from history
-        renderedCount = (store.session?.messages?.length ?? 0) + 2;
+        renderedCount = idx + 2;
         scrollDown();
         const controller = new AbortController();
         const stop = () => { postJSON("api/chat/stop").catch(() => {}); controller.abort(); };
@@ -320,6 +398,8 @@ export function chatView(store) {
         try {
           await streamChat(text, {
             signal: controller.signal,
+            editAt: editInfo ? editInfo.editAt : undefined,
+            editExpected: editInfo ? editInfo.editExpected : undefined,
             onEvent: (type, data) => {
               switch (type) {
                 case "text_delta": a.appendText(data.text); break;
@@ -327,7 +407,7 @@ export function chatView(store) {
                 case "tool_call_start": a.toolStart(data); break;
                 case "tool_call_end": a.toolEnd(data); break;
                 case "done": a.done(data); break;
-                case "error": a.note("Error: " + data.message); break;
+                case "error": console.error("chat turn error:", data.message); a.note("Error: " + data.message); break;
                 default: break;
               }
               scrollDown();
@@ -335,7 +415,7 @@ export function chatView(store) {
           });
         } catch (e) {
           if (e.name === "AbortError") a.note("Stopped.", "info");
-          else a.note(e.message || String(e));
+          else { console.error("chat request failed:", e); a.note(e.message || String(e)); }
         } finally {
           // After a stop the fetch rejects before the server has committed the
           // turn; stay in "streaming" (no history re-render) until it is idle.

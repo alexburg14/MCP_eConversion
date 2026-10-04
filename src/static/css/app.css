@@ -139,6 +139,15 @@ button { font: inherit; }
   max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15.5px;
 }
 .msg.assistant .bubble { max-width: 100%; }
+.msg.user .edit-btn { width: 26px; height: 26px; opacity: 0; transition: opacity .12s; }
+.msg.user:hover .edit-btn, .msg.user .edit-btn:focus-visible { opacity: 1; }
+.msg.user .edit-btn .ico { width: 15px; height: 15px; }
+.edit-textarea {
+  width: min(80%, 640px); min-height: 60px; resize: vertical; font: inherit; font-size: 15.5px;
+  color: var(--ink); background: var(--panel-2); border: 1px solid var(--accent); border-radius: 14px; padding: 11px 16px;
+}
+.edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+body.streaming .edit-btn, body.streaming .retry-btn { opacity: .3; pointer-events: none; }
 /* A dropdown, not a flex row: summary is its own line, steps/ul stack below it
    (display:flex on the <details> itself would put them side by side instead). */
 .researched { font-size: 14px; color: var(--muted); margin: 0 0 8px; }
